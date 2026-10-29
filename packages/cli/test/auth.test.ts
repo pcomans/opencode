@@ -218,7 +218,11 @@ describe("auth command", () => {
     expect(requests).toContainEqual({ method: "DELETE", path: `${endpoint}/con_oauth` })
   })
 
-  test("submits post-consent OAuth setup defaults before checking completion", async () => {
+  test.each([
+    { status: "complete", exitCode: 0, message: "Connected to Company" },
+    { status: "failed", exitCode: 1, message: "Billing team is no longer available" },
+    { status: "expired", exitCode: 1, message: "Authorization expired" },
+  ])("handles $status after submitting post-consent OAuth setup defaults", async (input) => {
     await using directory = await tmpdir("opencode-cli-oauth-setup-")
     const requests: string[] = []
     const answers: unknown[] = []
@@ -262,7 +266,9 @@ describe("auth command", () => {
                     ],
                   },
                 }
-              : { status: answers.length ? "complete" : "expired" }),
+              : answers.length
+                ? { status: input.status, ...(input.status === "failed" ? { message: input.message } : {}) }
+                : { status: "expired" }),
           }),
         )
       }
@@ -280,7 +286,7 @@ describe("auth command", () => {
       ["auth", "login", "company", "--server", server.url.toString()],
       isolatedEnv(directory.path),
     )
-    expect({ exitCode: result.exitCode, stderr: result.stderr }).toEqual({ exitCode: 0, stderr: "" })
+    expect({ exitCode: result.exitCode, stderr: result.stderr }).toEqual({ exitCode: input.exitCode, stderr: "" })
     expect(answers).toEqual([{ experimental: { answer: { teamID: "team_work" } } }])
     expect(requests).toEqual([
       `POST ${endpoint}`,
@@ -289,7 +295,8 @@ describe("auth command", () => {
       `GET ${endpoint}/con_setup`,
       `DELETE ${endpoint}/con_setup`,
     ])
-    expect(result.stdout).toContain("Connected to Company")
+    expect(result.stdout).toContain(input.message)
+    if (input.status !== "complete") expect(result.stdout).not.toContain("Connected to Company")
   })
 
   test("reports OAuth status polling failures and cancels the attempt", async () => {
