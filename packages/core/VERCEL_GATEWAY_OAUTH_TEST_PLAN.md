@@ -110,6 +110,7 @@ Run commands from the indicated package directory, never `bun test` from the rep
 # packages/core
 bun run script/test.ts test/plugin/provider-vercel.test.ts test/integration.test.ts test/model-resolver.test.ts
 bun run script/test.ts test/credential.test.ts test/credential-lock.test.ts test/integration-refresh.test.ts
+bun run script/test.ts test/util/effect-flock.test.ts test/util/flock.test.ts
 bun run typecheck:tsc
 
 # packages/cli
@@ -132,12 +133,12 @@ bun run check
 
 ## Results
 
-Executed 178 distinct fixture tests: 106 provider/integration/model-resolution, 10 credential lifecycle/refresh, 31 CLI, 14 TUI, 4 client contract, and 13 built-browser provider tests. All passed. Root checks passed 35/35; official core/CLI compiler, generated consistency and changed-file formatting passed.
+Executed 178 distinct fixture tests: 106 provider/integration/model-resolution, 10 credential lifecycle/refresh, 31 CLI, 14 TUI, 4 client contract, and 13 built-browser provider tests. All passed. The two existing file-lock suites added 23 passing tests, bringing the executed total to 201. Root checks passed 35/35; official core/CLI compiler, generated consistency and changed-file formatting passed.
 
 Live sign-in, adding alongside existing credentials, both desktop cancellation stages, switching, inference, connection-specific revocation, isolation, real CLI recovery and team confirmation, desktop recovery, and inactive extra deletion passed. Real CLI team-prompt cancellation also passed: exit 130, server cancellation event, attempt 404, saved IDs/values and selection unchanged. Natural refresh and final inference screenshots remain in progress.
 
 The first separate test instance collided with the installed managed service on port 49374. The working isolated instance uses explicit port 54746. The installed service and earlier test server were not restarted.
 
-Limits: full cross-process refresh composition, live cross-team billing, Windows/Linux desktop, and maintainer-owned client readiness remain unverified. The executed credential-lock and refresh suites establish same-process coalescing only. Existing cross-process lock tests were inspected, not included in the 178 executed tests; the complete cross-process refresh composition remains unverified. Live refresh is tracked separately above.
+Limits: full cross-process refresh composition, live cross-team billing, Windows/Linux desktop, and maintainer-owned client readiness remain unverified. The 178 OAuth/client tests are supplemented by 23 passing tests in the existing effect-flock and flock suites, including real subprocess lock mutual exclusion and crashed-owner recovery. These 201 tests do not establish the complete cross-process credential-refresh composition: that requires two real servers sharing one credential database. Live refresh is tracked separately above.
 
 Additional unexecuted client scenarios: desktop setup submission failure/retry and expired-status handling; TUI cancellation with its setup form visible; client code-mode OAuth transitioning into setup. Server code-mode coverage does not establish these client paths. Same-profile process-restart survival was not exercised because live app/server restart is prohibited by the workspace instructions. These are coverage gaps, not observed defects.
