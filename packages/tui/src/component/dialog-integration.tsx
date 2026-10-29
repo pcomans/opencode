@@ -714,7 +714,7 @@ function OAuthAuto(props: {
                   location: locationQuery(props.location),
                   experimental: { answer },
                 })
-                await connected(props.integration, props.location, data, dialog, toast, props.onConnected)
+                dialog.replace(() => <OAuthAuto {...props} />)
               })
               .catch((cause) => {
                 toast.show({ variant: "error", message: errorMessage(cause) })

@@ -1800,6 +1800,7 @@ test("providers: OAuth waits for a billing team before connecting", async ({ pag
             status: "pending",
             experimental: {
               setup: [
+                { key: "region", type: "string", required: true, hidden: true, default: "us" },
                 {
                   key: "teamID",
                   type: "string",
@@ -1838,5 +1839,5 @@ test("providers: OAuth waits for a billing team before connecting", async ({ pag
   await page.screenshot({ path: test.info().outputPath("billing-team-picker.png") })
   await next.click()
   await expect(page.getByText("Vercel AI Gateway connected", { exact: true })).toBeVisible()
-  expect(answers).toEqual([{ teamID: "team_playground" }])
+  expect(answers).toEqual([{ region: "us", teamID: "team_playground" }])
 })

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import path from "path"
-import { Cause, Clock, Duration, Effect, Exit, Fiber, Layer, Scope, Stream } from "effect"
+import { Cause, Clock, Deferred, Duration, Effect, Exit, Fiber, Layer, Scope, Stream } from "effect"
 import { TestClock } from "effect/testing"
 import { Credential } from "@opencode/core/credential"
 import { AppNodeBuilder } from "@opencode/core/effect/app-node-builder"
@@ -395,6 +395,80 @@ describe("Integration", () => {
       expect(yield* credentials.list(integrationID)).toHaveLength(1)
     }),
   )
+
+  ;(["auto", "code"] as const).forEach((mode) => {
+    ;(["cancel", "expire"] as const).forEach((reason) => {
+      it.effect(`${reason}s ${mode} OAuth while setup is preparing`, () =>
+        Effect.gen(function* () {
+          const integrations = yield* Integration.Service
+          const credentials = yield* Credential.Service
+          const entered = yield* Deferred.make<void>()
+          const release = yield* Deferred.make<void>()
+          const stopped = yield* Deferred.make<void>()
+          yield* Effect.addFinalizer(() => Deferred.succeed(release, undefined))
+          const integrationID = Integration.ID.make("setup")
+          const methodID = Integration.MethodID.make("oauth")
+          const value = Credential.OAuth.make({
+            type: "oauth",
+            methodID,
+            access: "access",
+            refresh: "refresh",
+            expires: 1,
+          })
+          yield* integrations.transform((editor) =>
+            editor.method.update({
+              integrationID,
+              method: { id: methodID, type: "oauth", label: "Setup" },
+              authorize: () =>
+                Effect.succeed({
+                  url: "https://example.com/authorize",
+                  instructions: "Sign in",
+                  ...(mode === "auto"
+                    ? { mode, callback: Effect.succeed(value) }
+                    : { mode, callback: () => Effect.succeed(value) }),
+                }),
+              experimental: {
+                setup: () =>
+                  Effect.gen(function* () {
+                    yield* Deferred.succeed(entered, undefined)
+                    yield* Deferred.await(release)
+                    return {
+                      fields: [{ key: "teamID", type: "string" as const, required: true }],
+                      complete: () => Effect.succeed(value),
+                    }
+                  }).pipe(Effect.ensuring(Deferred.succeed(stopped, undefined))),
+              },
+            }),
+          )
+          const attempt = yield* integrations.oauth.connect({ integrationID, methodID })
+          const completion =
+            mode === "code"
+              ? yield* integrations.oauth.complete({ integrationID, attemptID: attempt.attemptID, code: "1234" }).pipe(
+                  Effect.exit,
+                  Effect.forkChild({ startImmediately: true }),
+                )
+              : undefined
+          yield* Deferred.await(entered)
+          if (reason === "cancel") {
+            yield* integrations.oauth.cancel({ integrationID, attemptID: attempt.attemptID })
+            expect(
+              yield* integrations.oauth.status({ integrationID, attemptID: attempt.attemptID }).pipe(Effect.flip),
+            ).toBeInstanceOf(Integration.AttemptNotFoundError)
+          }
+          if (reason === "expire") {
+            yield* TestClock.adjust("10 minutes")
+            expect(yield* integrations.oauth.status({ integrationID, attemptID: attempt.attemptID })).toMatchObject({
+              status: "expired",
+            })
+          }
+          yield* Deferred.await(stopped)
+          if (completion) yield* Fiber.join(completion)
+          yield* Deferred.succeed(release, undefined)
+          expect(yield* credentials.list(integrationID)).toEqual([])
+        }),
+      )
+    })
+  })
 
   failingIt.effect("fails the attempt when credential persistence fails", () =>
     Effect.gen(function* () {
