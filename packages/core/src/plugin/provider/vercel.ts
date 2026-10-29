@@ -222,7 +222,9 @@ function send(http: HttpClient.HttpClient, request: HttpClientRequest.HttpClient
   )
 }
 
-function success(response: HttpClientResponse.HttpClientResponse) {
+function success(
+  response: HttpClientResponse.HttpClientResponse,
+): Effect.Effect<HttpClientResponse.HttpClientResponse, Error> {
   return response.status >= 200 && response.status < 300
     ? Effect.succeed(response)
     : Effect.fail(new Error(`Vercel authorization failed (${response.status}). Check the app configuration.`))
