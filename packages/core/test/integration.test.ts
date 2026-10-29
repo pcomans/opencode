@@ -433,7 +433,7 @@ describe("Integration", () => {
                     yield* Deferred.succeed(entered, undefined)
                     yield* Deferred.await(release)
                     return {
-                      fields: [{ key: "teamID", type: "string" as const, required: true }],
+                      fields: [{ key: "teamID", type: "string", required: true }] as const,
                       complete: () => Effect.succeed(value),
                     }
                   }).pipe(Effect.ensuring(Deferred.succeed(stopped, undefined))),
