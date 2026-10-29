@@ -478,7 +478,10 @@ const layer = Layer.effect(
       }
 
       const persistence = yield* Effect.gen(function* () {
-        const implementation = state.get().integrations.get(attempt.integrationID)?.implementations.get(attempt.methodID)
+        const implementation = state
+          .get()
+          .integrations.get(attempt.integrationID)
+          ?.implementations.get(attempt.methodID)
         if (!attempt.setup && implementation?.experimental) {
           const setup = yield* implementation.experimental.setup(exit.value)
           const invalid = Form.validateFields(setup.fields)
@@ -521,7 +524,7 @@ const layer = Layer.effect(
       // Persisting attempts cannot be cancelled, expired, or claimed again.
       yield* SynchronizedRef.update(attempts, (current) => new Map(current).set(attemptID, terminal))
       yield* close(attempt.scope)
-      yield* persistence
+      yield* authorize(persistence).pipe(Effect.asVoid)
     }, Effect.uninterruptible)
 
     const settleCommand = Effect.fnUntraced(function* (attemptID: AttemptID, exit: Exit.Exit<string, unknown>) {
