@@ -1,25 +1,20 @@
-import { Clock, Effect, Schema } from "effect"
+import { Clock, Deferred, Effect, Schema } from "effect"
 import type { Scope } from "effect"
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http"
+import type { ServerResponse } from "node:http"
 import { define } from "@opencode/plugin/effect/plugin"
 import { Form } from "@opencode/schema/form"
 import { Credential } from "../../credential.js"
 import { Integration } from "../../integration.js"
+import { OauthCallbackPage } from "../../oauth/page.js"
 
 const methodID = Integration.MethodID.make("gateway-oauth")
+const issuer = "https://vercel.com"
 const Discovery = Schema.Struct({
-  device_authorization_endpoint: Schema.NonEmptyString,
+  authorization_endpoint: Schema.NonEmptyString,
   token_endpoint: Schema.NonEmptyString,
 })
 const PositiveSeconds = Schema.Int.check(Schema.isGreaterThan(0))
-const Device = Schema.Struct({
-  device_code: Schema.NonEmptyString,
-  user_code: Schema.NonEmptyString,
-  verification_uri: Schema.NonEmptyString,
-  verification_uri_complete: Schema.optional(Schema.NonEmptyString),
-  expires_in: PositiveSeconds,
-  interval: Schema.optional(PositiveSeconds),
-})
 const Token = Schema.Struct({
   access_token: Schema.NonEmptyString,
   refresh_token: Schema.NonEmptyString,
@@ -56,24 +51,81 @@ export const VercelPlugin = define<HttpClient.HttpClient | Scope.Scope>({
               Effect.flatMap(success),
               Effect.flatMap((response) => decode(response, Discovery)),
             )
-            const device = yield* form(http, discovery.device_authorization_endpoint, {
-              client_id: clientID,
-              // AI Gateway → Use is configured on the app; offline_access requests refresh tokens.
-              scope: "openid offline_access",
-            }).pipe(
-              Effect.flatMap(success),
-              Effect.flatMap((response) => decode(response, Device)),
-            )
+            const verifier = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url")
+            const challenge = Buffer.from(
+              yield* Effect.promise(() => crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier))),
+            ).toString("base64url")
+            const state = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url")
+            const callback = yield* Deferred.make<{ code: string; response: ServerResponse }, Error>()
+            const { createServer } = yield* Effect.promise(() => import("node:http"))
+            const { EventEmitter } = yield* Effect.promise(() => import("node:events"))
+            const server = createServer((request, response) => {
+              const url = new URL(request.url ?? "/", "http://127.0.0.1")
+              if (request.method !== "GET" || url.pathname !== "/oauth/callback") {
+                response.writeHead(404).end()
+                return
+              }
+              if (url.searchParams.get("state") !== state || (url.searchParams.has("iss") && url.searchParams.get("iss") !== issuer)) {
+                response.writeHead(400).end("Invalid OAuth callback")
+                return
+              }
+              const error = url.searchParams.has("error")
+                ? "Vercel sign-in was denied. Start sign-in again when ready."
+                : !url.searchParams.get("code")?.trim()
+                  ? "Vercel did not return an authorization code. Start sign-in again."
+                  : undefined
+              if (error) {
+                response.writeHead(400, { "Content-Type": "text/html" }).end(OauthCallbackPage.error(error, { provider: "Vercel" }))
+                Effect.runSync(Deferred.fail(callback, new Error(error)))
+                return
+              }
+              if (!Effect.runSync(Deferred.succeed(callback, { code: url.searchParams.get("code") ?? "", response })))
+                response.writeHead(409).end("OAuth callback already received")
+            })
+            yield* Effect.addFinalizer(() => Effect.sync(() => {
+              server.close()
+              server.closeAllConnections()
+            }))
+            yield* Effect.tryPromise({
+              try: () => EventEmitter.once(server.listen(0, "127.0.0.1"), "listening"),
+              catch: () => new Error("Could not start the local Vercel sign-in callback. Try signing in again."),
+            })
+            const address = server.address()
+            if (!address || typeof address === "string")
+              return yield* Effect.fail(new Error("Missing Vercel OAuth callback port"))
+            const redirect = `http://127.0.0.1:${address.port}/oauth/callback`
             const context = { clientID, tokenEndpoint: discovery.token_endpoint }
-            const expiresAt = (yield* Clock.currentTimeMillis) + device.expires_in * 1000
             return {
               mode: "auto" as const,
-              url: device.verification_uri_complete ?? device.verification_uri,
-              instructions: `Sign in to Vercel and enter code ${device.user_code}. Then return to OpenCode to choose the team billed for AI Gateway usage.`,
-              expiresAt,
-              callback: poll(http, device.device_code, context, expiresAt, (device.interval ?? 5) * 1000).pipe(
-                Effect.flatMap((token) => credential(token, context)),
-              ),
+              url: `${discovery.authorization_endpoint}?${new URLSearchParams({
+                response_type: "code",
+                client_id: clientID,
+                redirect_uri: redirect,
+                // AI Gateway → Use is configured on the app; offline_access requests refresh tokens.
+                scope: "openid offline_access",
+                code_challenge: challenge,
+                code_challenge_method: "S256",
+                state,
+              })}`,
+              instructions: "Sign in to Vercel in your browser. Then return to OpenCode to choose the team billed for AI Gateway usage.",
+              callback: Effect.gen(function* () {
+                const request = yield* Deferred.await(callback)
+                return yield* form(http, context.tokenEndpoint, {
+                  grant_type: "authorization_code",
+                  client_id: clientID,
+                  code: request.code,
+                  redirect_uri: redirect,
+                  code_verifier: verifier,
+                }).pipe(
+                  Effect.flatMap(success),
+                  Effect.flatMap((response) => decode(response, Token)),
+                  Effect.flatMap((token) => credential(token, context)),
+                  // Authorization is finished; saving still requires billing-team confirmation in OpenCode.
+                  Effect.tap(() => Effect.sync(() => request.response.writeHead(200, { "Content-Type": "text/html" }).end(OauthCallbackPage.success()))),
+                  Effect.tapError((error) => Effect.sync(() => request.response.writeHead(400, { "Content-Type": "text/html" }).end(OauthCallbackPage.error(error.message, { provider: "Vercel" })))),
+                  Effect.onInterrupt(() => Effect.sync(() => request.response.destroy())),
+                )
+              }),
             }
           }),
         experimental: {
@@ -160,39 +212,6 @@ function listTeams(
     const page = yield* success(response).pipe(Effect.flatMap((response) => decode(response, Teams)))
     if (page.pagination.next === null) return page.teams
     return [...page.teams, ...(yield* listTeams(http, access, page.pagination.next))]
-  })
-}
-
-function poll(
-  http: HttpClient.HttpClient,
-  deviceCode: string,
-  context: typeof Context.Type,
-  expiresAt: number,
-  interval: number,
-): Effect.Effect<typeof Token.Type, unknown> {
-  return Effect.gen(function* () {
-    yield* Effect.sleep(interval)
-    if ((yield* Clock.currentTimeMillis) >= expiresAt) {
-      return yield* Effect.fail(new Error("Vercel sign-in expired. Start sign-in again."))
-    }
-    const response = yield* form(http, context.tokenEndpoint, {
-      grant_type: "urn:ietf:params:oauth:grant-type:device_code",
-      client_id: context.clientID,
-      device_code: deviceCode,
-    })
-    if (response.status >= 200 && response.status < 300) return yield* decode(response, Token)
-    const error = yield* decode(response, OAuthError)
-    if (error.error === "authorization_pending") return yield* poll(http, deviceCode, context, expiresAt, interval)
-    if (error.error === "slow_down") return yield* poll(http, deviceCode, context, expiresAt, interval + 5000)
-    return yield* Effect.fail(
-      new Error(
-        error.error === "access_denied"
-          ? "Vercel sign-in was denied. Start sign-in again when ready."
-          : error.error === "expired_token"
-            ? "Vercel sign-in expired. Start sign-in again."
-            : "Vercel sign-in failed. Try again.",
-      ),
-    )
   })
 }
 
