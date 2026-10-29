@@ -44,9 +44,11 @@ bun run script/test.ts test/plugin/provider-vercel.test.ts
 
 The tests use fixture HTTP responses, the real integration state machine and credential store, a controlled clock, and the native Gateway request path. They cover sign-in, bearer-token inference, refresh rotation, client and team binding, team pagination, explicit choice, limited-team filtering, cancellation before and after consent, missing Team Read, empty team lists, polling delays, denied authorization, expired codes, and missing refresh tokens. They do not sign in to Vercel or make real model requests.
 
-A personal test app completed real device sign-in and inference on 2026-10-29. The initial inference failed without a team selector; adding `x-vercel-ai-gateway-team` for an authorized team made both direct Gateway inference and the packaged OpenCode session succeed. This established the need for explicit team selection. It did not validate the new picker, the maintainer-owned release client, live refresh rotation, or live revocation.
+A personal test app completed the updated flow on 2026-10-29: fresh device consent with both permissions, live team discovery, explicit selection of `philippcomans-1463`, and credential persistence. With no manual provider-header configuration, the packaged server returned HTTP 200 and `703` for `37 × 19`; a desktop chat using Vercel / GPT 5.4 Nano returned `225` for `58 + 167` and completed successfully.
 
-Before release, validate the updated flow end to end: fresh consent with both permissions, the billing-team picker, a real inference request without a manually configured team header, refresh-token rotation, and reauthentication after revocation. The fixture tests cannot establish permission eligibility, device-grant availability, or live Gateway acceptance for a new app.
+The initial version failed inference without a team selector. The updated flow supplies the selected team ID from the saved OAuth credential. These checks establish live sign-in, team setup, and inference for the test app; they do not validate the maintainer-owned release client, live refresh rotation, or live revocation.
+
+Before release, repeat the flow using the maintainer-owned client and validate live refresh-token rotation and reauthentication after revocation. The fixture tests cannot establish permission eligibility, device-grant availability, or live Gateway acceptance for a new app.
 
 Confirm with Vercel whether beta enablement is needed only for the app owner's team or also for teams authorizing the app. A public sign-in setting does not establish API-permission eligibility for every user's team.
 
