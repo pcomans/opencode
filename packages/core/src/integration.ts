@@ -477,8 +477,8 @@ const layer = Layer.effect(
         return
       }
 
-      const implementation = state.get().integrations.get(attempt.integrationID)?.implementations.get(attempt.methodID)
       const persistence = yield* Effect.gen(function* () {
+        const implementation = state.get().integrations.get(attempt.integrationID)?.implementations.get(attempt.methodID)
         if (!attempt.setup && implementation?.experimental) {
           const setup = yield* implementation.experimental.setup(exit.value)
           const invalid = Form.validateFields(setup.fields)
