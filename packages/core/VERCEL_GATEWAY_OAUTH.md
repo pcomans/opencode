@@ -36,7 +36,9 @@ When a saved connection is used within five minutes of access-token expiry, Open
 
 OpenCode saves both returned tokens on the same credential ID and preserves its label, billing team, and original client binding. The existing credential lock coordinates refresh. A refresh failure preserves the saved connection; an expired or revoked refresh token requires sign-in again. User-facing exchange and decoding errors exclude token response bodies.
 
-Both device and authorization-code grants produce the same credential shape and use this refresh path. A prior device-grant live test demonstrated natural near-expiry rotation and successful inference without browser consent. That result does not by itself verify authorization-code sign-in or a new grant's refresh behavior.
+A real authorization-code grant completed natural near-expiry refresh on macOS on 2026-10-29. With inference running about every 55 seconds, all 23 checks returned HTTP 200. OpenCode rotated both tokens at 22:24:15 UTC, about 4 minutes 15 seconds before the original access-token expiry, and advanced the expiry by an hour from renewal. The connection ID, label, active selection, billing team, and client binding were preserved. No browser approval, manual refresh exchange, or stored-expiry change was involved. Subsequent desktop inference returned `574` for `82 × 7` using the same replacement pair.
+
+Vercel introspection reported both old tokens inactive immediately after rotation and both new tokens active. Gateway rejection timing remains unverified: a direct request using the old access token returned HTTP 200 about five seconds after its nominal expiry; its response body was not retained. A retry about 82 seconds after expiry returned HTTP 401 while normal OpenCode inference continued to succeed. The exact rejection cutoff and the reason for this delay were not established. This observation does not establish immediate Gateway revocation or expiry enforcement.
 
 ## Verification
 
