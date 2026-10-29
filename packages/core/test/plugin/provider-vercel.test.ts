@@ -174,6 +174,7 @@ describe("Vercel OAuth", () => {
         expect(setup).toMatchObject({ status: "pending", experimental: { setup: [{ options: [{ value: team.id }] }] } })
         expect(yield* credentials.list(integrationID)).toEqual([])
         expect(JSON.stringify(setup)).not.toContain(token.access_token)
+        expect(JSON.stringify(setup)).not.toContain(token.refresh_token)
         const invalid = yield* integrations.oauth
           .complete({
             integrationID,
@@ -182,6 +183,11 @@ describe("Vercel OAuth", () => {
           })
           .pipe(Effect.exit)
         expect(Exit.isFailure(invalid)).toBe(true)
+        expect(yield* credentials.list(integrationID)).toEqual([])
+        expect(yield* integrations.oauth.status({ integrationID, attemptID: attempt.attemptID })).toMatchObject({
+          status: "pending",
+          experimental: { setup: [{ options: [{ value: team.id }] }] },
+        })
         const status = yield* terminal(integrations, attempt.attemptID)
         expect(status.status).toBe("complete")
         const stored = (yield* credentials.list(integrationID))[0]
