@@ -17,6 +17,8 @@ This macOS run used runtime revision `1ed41e37d8`, packaged frontend and bundled
 
 For a repeat run, use the maintainer-owned client in the server environment, preserve an existing connection, and create a disposable additional connection for revocation and deletion. Keep Gateway API-key and OIDC environment credentials unset and remove manual provider-header overrides so inference actually exercises OAuth. Stop before any revocation action that would affect all app sessions.
 
+The new profile is canonical for this run. Isolation applies to local storage and processes, not OAuth grants: the database backup copied the same token pair. Once that pair rotates, the earlier test profile holds a stale refresh token. Preservation means the existing credential ID and connection remain usable in the new canonical profile; it does not mean both copied profiles can continue using one rotating grant independently. The separately installed OpenCode service/profile is untouched.
+
 ## A. Real desktop and Vercel service
 
 | ID  | Action and acceptance criteria                                                                                                                            | Result                                                                                                                                                            |
@@ -44,23 +46,25 @@ For a repeat run, use the maintainer-owned client in the server environment, pre
 | L21 | Delete the inactive extra test connection by explicit ID with the production CLI; active original remains usable (TUI confirmation is covered separately) | Pass live: CLI switched original, removed only revoked extra ID, original inference HTTP 200 / 53                                                                 |
 | L22 | Capture final account list, final successful inference, and sanitized evidence                                                                            | Queued                                                                                                                                                            |
 
+The refresh probe records that the pair and expiry remain unchanged immediately before its requests. Successful concurrent inference plus changed tokens establishes live rotation; it does not count token-endpoint exchanges or guarantee overlapping credential resolution. Exactly-one live refresh is not claimed.
+
 Live cross-team billing, SSO/MFA organization policies, denied browser consent, and installation authorization by another user require additional eligible Vercel accounts/teams or human actions. Do not claim these passed from same-team testing; corresponding implementation behavior is checked below where fixtures support it.
 
 ## B. Device grant and team discovery
 
-| ID  | Contract                                                                                                 | Execution/evidence                                                                                              |
-| --- | -------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| O01 | OAuth appears alongside existing key and environment methods                                             | Pass fixture: provider/core matrix, 106 tests                                                                   |
-| O02 | Public client requests identity/refresh scopes without a client secret                                   | Pass fixture: provider request assertions, 106-test matrix                                                      |
-| O03 | Pending and slow_down respect polling intervals                                                          | Pass fixture: TestClock pending + slow_down case                                                                |
-| O04 | Denied consent, expired code and unknown OAuth errors fail clearly without persistence                   | Pass fixture: expanded device/token rejection table                                                             |
-| O05 | Malformed token bodies, missing refresh token, invalid token lifetime fail without exposing token bodies | Pass fixture: provider/core matrix 106/106                                                                      |
-| O06 | Cancel polling before consent stops further token requests                                               | Pass fixture: polling cancellation case; live desktop close also exercised                                      |
-| O07 | Team pagination includes later pages and filters limited teams                                           | Pass fixture: paginated team choice + limited-team cases                                                        |
-| O08 | Multiple teams require explicit selection; single team still requires confirmation                       | Pass fixture: provider multi-team and built-browser single-team confirmation; live desktop and CLI confirmation |
-| O09 | Unknown team answer is rejected without saving a partial connection                                      | Pass fixture: invalid team answer leaves setup open and saves nothing                                           |
-| O10 | Missing Team Read, empty/all-limited teams, malformed team responses fail without persistence            | Pass fixture: Team Read/empty/all-limited/malformed response table                                              |
-| O11 | Status exposes form fields and never OAuth token values                                                  | Pass fixture: pending status contains fields, no OAuth secrets                                                  |
+| ID  | Contract                                                                                                 | Execution/evidence                                                                                                          |
+| --- | -------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| O01 | OAuth appears alongside existing key and environment methods                                             | Pass fixture: provider/core matrix, 106 tests                                                                               |
+| O02 | Public client requests identity/refresh scopes without a client secret                                   | Pass fixture: provider request assertions, 106-test matrix                                                                  |
+| O03 | Pending and slow_down respect polling intervals                                                          | Pass fixture: handles authorization_pending; asserts at least 6 seconds after slow_down                                     |
+| O04 | Denied consent, expired code and unknown OAuth errors fail clearly without persistence                   | Pass fixture: expanded device/token rejection table                                                                         |
+| O05 | Malformed token bodies, missing refresh token, invalid token lifetime fail without exposing token bodies | Pass fixture: provider/core matrix 106/106                                                                                  |
+| O06 | Cancel polling before consent stops further token requests                                               | Pass fixture: polling cancellation case; live desktop close also exercised                                                  |
+| O07 | Team pagination includes later pages and filters limited teams                                           | Pass fixture: paginated team choice + limited-team cases                                                                    |
+| O08 | Multiple teams require explicit selection; single team still requires confirmation                       | Pass fixture: provider and built-browser multi-team selection; single-team confirmation in TUI fixture and live desktop/CLI |
+| O09 | Unknown team answer is rejected without saving a partial connection                                      | Pass fixture: invalid team answer leaves setup open and saves nothing                                                       |
+| O10 | Missing Team Read, empty/all-limited teams, malformed team responses fail without persistence            | Pass fixture: Team Read/empty/all-limited/malformed response table                                                          |
+| O11 | Status exposes form fields and never OAuth token values                                                  | Pass fixture: pending status contains fields, no OAuth secrets                                                              |
 
 ## C. Lifecycle, concurrency and credentials
 
@@ -80,16 +84,16 @@ Live cross-team billing, SSO/MFA organization policies, denied browser consent, 
 
 ## D. Desktop, CLI, TUI and public contracts
 
-| ID  | Contract                                                                         | Execution/evidence                                                                                                                      |
-| --- | -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| U01 | Desktop team picker waits for selection and sends the selected ID                | Pass fixture: built-browser OAuth keeper; live personal-team selection passed                                                           |
-| U02 | Desktop required hidden defaults reach setup completion                          | Pass fixture: same built-browser keeper submits required hidden default                                                                 |
-| U03 | TUI completion handles complete, failed and expired status without false success | Pass fixture: 14 TUI tests include complete/failed/expired statuses                                                                     |
-| U04 | TUI account activation, rename, delete confirmation and location behavior        | Pass fixture: 14 TUI tests include switching, rename, confirmation and location behavior                                                |
-| U05 | CLI forms, defaults, auth choices and account management                         | Pass fixture: 31 CLI tests; live OAuth CLI consent and visible team confirmation passed. Visible-prompt cancellation remains unverified |
-| U06 | Public FormFields1 export remains present; OAuth timestamps remain numeric       | Pass: 4 client contract tests + official compiler                                                                                       |
-| U07 | Generated clients are reproducible from the public schema                        | Pass: bun run check:generated, no generated diff                                                                                        |
-| U08 | Full repository lint/type checks and official core compiler                      | Pass: root check 35/35; official core and CLI TypeScript compilers                                                                      |
+| ID  | Contract                                                                         | Execution/evidence                                                                                                                                                                              |
+| --- | -------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| U01 | Desktop team picker waits for selection and sends the selected ID                | Pass fixture: built-browser OAuth keeper; live personal-team selection passed                                                                                                                   |
+| U02 | Desktop required hidden defaults reach setup completion                          | Pass fixture: same built-browser keeper submits required hidden default                                                                                                                         |
+| U03 | TUI completion handles complete, failed and expired status without false success | Pass fixture: 14 TUI tests include complete/failed/expired statuses                                                                                                                             |
+| U04 | TUI account activation, rename, delete confirmation and location behavior        | Pass fixture: 14 TUI tests include switching, rename, confirmation and location behavior                                                                                                        |
+| U05 | CLI forms, defaults, auth choices and account management                         | Pass fixture: 31 CLI tests; live OAuth CLI consent and visible team confirmation passed. Real CLI team-prompt Ctrl+C passed: exit 130, closed attempt 404, saved IDs/values/selection unchanged |
+| U06 | Public FormFields1 export remains present; OAuth timestamps remain numeric       | FormFields1 contract test passed; numeric timestamps inspected in generated source; official compiler passed                                                                                    |
+| U07 | Generated clients are reproducible from the public schema                        | Pass: bun run check:generated, no generated diff                                                                                                                                                |
+| U08 | Full repository lint/type checks and official core compiler                      | Pass: root check 35/35; official core and CLI TypeScript compilers                                                                                                                              |
 
 ## Release checks beyond this local run
 
@@ -130,8 +134,10 @@ bun run check
 
 Executed 178 distinct fixture tests: 106 provider/integration/model-resolution, 10 credential lifecycle/refresh, 31 CLI, 14 TUI, 4 client contract, and 13 built-browser provider tests. All passed. Root checks passed 35/35; official core/CLI compiler, generated consistency and changed-file formatting passed.
 
-Live sign-in, adding alongside existing credentials, both desktop cancellation stages, switching, inference, connection-specific revocation, isolation, real CLI recovery and team confirmation, desktop recovery, and inactive extra deletion passed. Natural refresh and final screenshots remain in progress.
+Live sign-in, adding alongside existing credentials, both desktop cancellation stages, switching, inference, connection-specific revocation, isolation, real CLI recovery and team confirmation, desktop recovery, and inactive extra deletion passed. Real CLI team-prompt cancellation also passed: exit 130, server cancellation event, attempt 404, saved IDs/values and selection unchanged. Natural refresh and final inference screenshots remain in progress.
 
 The first separate test instance collided with the installed managed service on port 49374. The working isolated instance uses explicit port 54746. The installed service and earlier test server were not restarted.
 
-Limits: full cross-process refresh composition, live cross-team billing, CLI cancellation at a visible team prompt, Windows/Linux desktop, and maintainer-owned client readiness remain unverified. The existing credential lock tests exercise mutual exclusion, and refresh tests exercise same-process cross-Location coalescing; they do not establish the complete cross-process composition. Live refresh is tracked separately above.
+Limits: full cross-process refresh composition, live cross-team billing, Windows/Linux desktop, and maintainer-owned client readiness remain unverified. The executed credential-lock and refresh suites establish same-process coalescing only. Existing cross-process lock tests were inspected, not included in the 178 executed tests; the complete cross-process refresh composition remains unverified. Live refresh is tracked separately above.
+
+Additional unexecuted client scenarios: desktop setup submission failure/retry and expired-status handling; TUI cancellation with its setup form visible; client code-mode OAuth transitioning into setup. Server code-mode coverage does not establish these client paths. Same-profile process-restart survival was not exercised because live app/server restart is prohibited by the workspace instructions. These are coverage gaps, not observed defects.
