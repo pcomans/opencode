@@ -258,8 +258,7 @@ test.each([
     fixture.app.mockInput.pressEnter()
     await fixture.app.waitForFrame(
       (frame) =>
-        frame.includes("Choose a billing team") &&
-        fixture.app.renderer.currentFocusedEditor instanceof InputRenderable,
+        frame.includes("Choose a billing team") && fixture.app.renderer.currentFocusedEditor instanceof InputRenderable,
     )
     fixture.app.mockInput.pressEnter()
     await fixture.app.waitForFrame((frame) => frame.includes(message))
