@@ -667,6 +667,7 @@ function OAuthAuto(props: {
   const newDesigns = useNewDesigns()
   let timer: ReturnType<typeof setTimeout> | undefined
   let settled = false
+  let disposed = false
 
   const open = () => {
     openUrl(props.attempt.url).catch(() =>
@@ -701,6 +702,7 @@ function OAuthAuto(props: {
         location: locationQuery(props.location),
       })
       .then((result) => {
+        if (disposed) return
         const status = result.data
         if (status.status === "pending") {
           if (status.experimental?.setup) {
@@ -743,6 +745,7 @@ function OAuthAuto(props: {
         dialog.clear()
       })
       .catch((cause) => {
+        if (disposed) return
         settled = true
         toast.show({ variant: "error", message: errorMessage(cause) })
         dialog.clear()
@@ -751,6 +754,7 @@ function OAuthAuto(props: {
 
   onMount(poll)
   onCleanup(() => {
+    disposed = true
     if (timer) clearTimeout(timer)
     if (settled) return
     void client.api.integration.oauth.cancel({

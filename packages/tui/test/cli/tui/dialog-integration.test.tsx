@@ -277,11 +277,45 @@ test.each([
   }
 })
 
+test.each(["setup", "error"] as const)("ignores a late OAuth %s response after cancellation", async (reply) => {
+  const started = Promise.withResolvers<void>()
+  const release = Promise.withResolvers<void>()
+  const fixture = await renderIntegration(undefined, undefined, "complete", async (response) => {
+    started.resolve()
+    await release.promise
+    return reply === "setup" ? response : json({ message: "Late authorization status failure" }, { status: 500 })
+  })
+
+  try {
+    fixture.app.mockInput.pressEnter()
+    await started.promise
+    await fixture.app.waitForFrame((frame) => frame.includes("Waiting for authorization"))
+    fixture.app.mockInput.pressEscape()
+    await fixture.oauthCancelled
+    await fixture.app.waitForFrame((frame) => !frame.includes("Waiting for authorization"))
+    const closed = fixture.app.captureCharFrame()
+
+    release.resolve()
+    await fixture.app.waitForVisualIdle({ quietFrames: 2 })
+
+    expect(fixture.app.captureCharFrame()).toBe(closed)
+    expect(fixture.reads.oauth).toBe(1)
+    expect(fixture.reads.model).toBe(0)
+    expect(fixture.reads.provider).toBe(0)
+    expect(fixture.requests).toEqual([])
+  } finally {
+    release.resolve()
+    fixture.app.renderer.destroy()
+  }
+})
+
 async function renderIntegration(
   activeLocation?: LocationRef,
   form?: FormFields,
   oauth?: "complete" | "failed" | "expired",
+  oauthStatus?: (response: Response) => Promise<Response>,
 ) {
+  const oauthCancelled = Promise.withResolvers<void>()
   const events = createEventStream()
   const requests: Array<{ method: string; path: string; body?: unknown }> = []
   const locations: LocationRef[] = []
@@ -341,7 +375,7 @@ async function renderIntegration(
 
     if (request.method === "GET" && url.pathname === "/api/integration/openai/connect/oauth/attempt_fixture") {
       reads.oauth++
-      return json({
+      const response = json({
         location,
         data: {
           time: { created: 0, expires: 600_000 },
@@ -363,6 +397,7 @@ async function renderIntegration(
               }),
         },
       })
+      return oauthStatus ? oauthStatus(response) : response
     }
 
     if (
@@ -375,6 +410,7 @@ async function renderIntegration(
     }
 
     if (request.method === "DELETE" && url.pathname === "/api/integration/openai/connect/oauth/attempt_fixture") {
+      oauthCancelled.resolve()
       return new Response(null, { status: 204 })
     }
 
@@ -483,6 +519,7 @@ async function renderIntegration(
     requests,
     locations,
     credentialQueries,
+    oauthCancelled: oauthCancelled.promise,
     get accounts() {
       return accounts
     },
