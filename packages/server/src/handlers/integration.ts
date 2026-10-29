@@ -162,6 +162,7 @@ export const IntegrationHandler = HttpApiBuilder.group(Api, "server.integration"
               integrationID: ctx.params.integrationID,
               attemptID: ctx.params.attemptID,
               code: ctx.payload.code,
+              experimental: ctx.payload.experimental,
             })
             .pipe(
               Effect.mapError((error) => {

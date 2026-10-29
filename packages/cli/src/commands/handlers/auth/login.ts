@@ -61,7 +61,9 @@ const findIntegration = Effect.fn("cli.auth.login.integration")(function* (clien
     if (protocol === "http:" || protocol === "https:") {
       const progress = spinner()
       progress.start("Discovering authentication provider...")
-      yield* request((signal) => client.experimental.integration.wellknown.add({ url: target, location }, { signal })).pipe(
+      yield* request((signal) =>
+        client.experimental.integration.wellknown.add({ url: target, location }, { signal }),
+      ).pipe(
         Effect.tap(() => Effect.sync(() => progress.stop("Authentication provider discovered"))),
         Effect.tapCause(() => Effect.sync(() => progress.stop("Discovery failed", 1))),
       )
@@ -205,10 +207,9 @@ export const oauthLogin = Effect.fn("cli.auth.login.oauth")(function* (
         { signal },
       ),
     ).pipe(
-      Effect.tap(() => Effect.sync(() => completing.stop(`Connected to ${integration.name}`))),
+      Effect.tap(() => Effect.sync(() => completing.stop("Authorization code accepted"))),
       Effect.tapCause(() => Effect.sync(() => completing.stop("Authentication failed", 1))),
     )
-    return
   }
 
   // Clack's spinner captures Ctrl+C and exits the process directly, which would skip the finalizer that
@@ -274,6 +275,21 @@ const waitForOAuth = Effect.fn("cli.auth.login.oauth.wait")(function* (
       client.integration.oauth.status({ integrationID, attemptID, location }, { signal }),
     )
     if (response.data.status !== "pending") return response.data
+    if (response.data.experimental?.setup) {
+      const answer = yield* answerForm(response.data.experimental.setup)
+      yield* request((signal) =>
+        client.integration.oauth.complete(
+          {
+            integrationID,
+            attemptID,
+            location,
+            experimental: { answer: answer ?? {} },
+          },
+          { signal },
+        ),
+      )
+      continue
+    }
     yield* Effect.sleep(500)
   }
 })

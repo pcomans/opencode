@@ -1635,6 +1635,7 @@ export type IntegrationOauthCompleteInput = {
   readonly attemptID: Integration.AttemptID
   readonly location?: { readonly directory?: string | undefined } | undefined
   readonly code?: string | undefined
+  readonly experimental?: { readonly answer: Form.Answer } | undefined
 }
 export type IntegrationOauthCompleteOutput = void
 export type IntegrationOauthCompleteOperation<E = never> = (

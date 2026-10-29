@@ -21,10 +21,18 @@ const it = testEffect(PluginTestLayer)
 const integrationID = Integration.ID.make("vercel")
 const methodID = Integration.MethodID.make("gateway-oauth")
 const tokenEndpoint = "https://api.vercel.com/login/oauth/token"
+const team = { id: "team_work", slug: "work", name: "Work" }
 const token = { access_token: "test-access", refresh_token: "test-refresh", expires_in: 3600 }
 
 function backend() {
-  const requests: { method: string; url: string; body: string; authorization: string | null; time: number }[] = []
+  const requests: {
+    method: string
+    url: string
+    body: string
+    authorization: string | null
+    team: string | null
+    time: number
+  }[] = []
   const replies = {
     device: {
       device_code: "test-device",
@@ -35,6 +43,10 @@ function backend() {
       interval: 1,
     },
     tokens: [{ status: 200, body: token }] as { status: number; body: unknown }[],
+    teams: [{ status: 200, body: { teams: [team], pagination: { next: null } } }] as {
+      status: number
+      body: unknown
+    }[],
   }
   const client = HttpClient.make((request) =>
     Effect.gen(function* () {
@@ -45,6 +57,7 @@ function backend() {
         url: web.url,
         body,
         authorization: web.headers.get("authorization"),
+        team: web.headers.get("x-vercel-ai-gateway-team"),
         time: yield* Clock.currentTimeMillis,
       })
       const response = (() => {
@@ -57,6 +70,10 @@ function backend() {
         if (web.url.endsWith("/device-authorization")) return Response.json(replies.device)
         if (web.url === tokenEndpoint) {
           const reply = replies.tokens.shift()
+          return reply ? Response.json(reply.body, { status: reply.status }) : new Response(null, { status: 500 })
+        }
+        if (web.url.startsWith("https://api.vercel.com/v2/teams?")) {
+          const reply = replies.teams.shift()
           return reply ? Response.json(reply.body, { status: reply.status }) : new Response(null, { status: 500 })
         }
         if (web.url === "https://ai-gateway.vercel.sh/v1/responses") {
@@ -79,10 +96,13 @@ const register = Effect.fn(function* (client: HttpClient.HttpClient) {
   return yield* Integration.Service
 })
 
-const terminal = Effect.fn(function* (integrations: Integration.Interface, attemptID: Integration.AttemptID) {
+const ready = Effect.fn(function* (integrations: Integration.Interface, attemptID: Integration.AttemptID) {
   const state = { status: yield* integrations.oauth.status({ integrationID, attemptID }) }
   const polling = yield* integrations.oauth.status({ integrationID, attemptID }).pipe(
-    Effect.repeat({ while: (value) => value.status === "pending", schedule: Schedule.spaced("100 millis") }),
+    Effect.repeat({
+      while: (value) => value.status === "pending" && !value.experimental?.setup,
+      schedule: Schedule.spaced("100 millis"),
+    }),
     Effect.tap((value) =>
       Effect.sync(() => {
         state.status = value
@@ -90,8 +110,15 @@ const terminal = Effect.fn(function* (integrations: Integration.Interface, attem
     ),
     Effect.forkChild({ startImmediately: true }),
   )
-  yield* advance(() => state.status.status !== "pending")
+  yield* advance(() => state.status.status !== "pending" || !!state.status.experimental?.setup)
   return yield* Fiber.join(polling)
+})
+
+const terminal = Effect.fn(function* (integrations: Integration.Interface, attemptID: Integration.AttemptID) {
+  const status = yield* ready(integrations, attemptID)
+  if (status.status !== "pending") return status
+  yield* integrations.oauth.complete({ integrationID, attemptID, experimental: { answer: { teamID: team.id } } })
+  return yield* integrations.oauth.status({ integrationID, attemptID })
 })
 
 describe("Vercel OAuth", () => {
@@ -125,6 +152,18 @@ describe("Vercel OAuth", () => {
         expect(new URLSearchParams(server.requests[1]?.body)).toEqual(
           new URLSearchParams({ client_id: "test-opencode-app", scope: "openid offline_access" }),
         )
+        const setup = yield* ready(integrations, attempt.attemptID)
+        expect(setup).toMatchObject({ status: "pending", experimental: { setup: [{ options: [{ value: team.id }] }] } })
+        expect(yield* credentials.list(integrationID)).toEqual([])
+        expect(JSON.stringify(setup)).not.toContain(token.access_token)
+        const invalid = yield* integrations.oauth
+          .complete({
+            integrationID,
+            attemptID: attempt.attemptID,
+            experimental: { answer: { teamID: "team_unauthorized" } },
+          })
+          .pipe(Effect.exit)
+        expect(Exit.isFailure(invalid)).toBe(true)
         const status = yield* terminal(integrations, attempt.attemptID)
         expect(status.status).toBe("complete")
         const stored = (yield* credentials.list(integrationID))[0]
@@ -134,7 +173,7 @@ describe("Vercel OAuth", () => {
           methodID,
           access: token.access_token,
           refresh: token.refresh_token,
-          metadata: { clientID: "test-opencode-app", tokenEndpoint },
+          metadata: { clientID: "test-opencode-app", tokenEndpoint, teamID: team.id, teamSlug: team.slug },
         })
         expect(JSON.stringify(status)).not.toContain(token.access_token)
         expect(JSON.stringify(status)).not.toContain(token.refresh_token)
@@ -155,7 +194,11 @@ describe("Vercel OAuth", () => {
           ),
         )
         expect(server.requests.at(-1)?.authorization).toBe(`Bearer ${token.access_token}`)
-        expect(server.requests.some((request) => /\/api-keys|\/teams/.test(request.url))).toBe(false)
+        expect(server.requests.at(-1)?.team).toBe(team.id)
+        expect(server.requests.some((request) => /\/api-keys/.test(request.url))).toBe(false)
+        expect(server.requests.find((request) => request.url.includes("/v2/teams"))?.authorization).toBe(
+          `Bearer ${token.access_token}`,
+        )
       }),
     ),
   )
@@ -174,7 +217,7 @@ describe("Vercel OAuth", () => {
             access: "expired-access",
             refresh: "single-use-refresh",
             expires: 0,
-            metadata: { clientID: "original-app", tokenEndpoint, custom: "keep" },
+            metadata: { clientID: "original-app", tokenEndpoint, custom: "keep", teamID: team.id, teamSlug: team.slug },
           }),
         })
         const integrations = yield* register(server.client)
@@ -192,7 +235,10 @@ describe("Vercel OAuth", () => {
         expect(yield* credentials.get(stored.id)).toMatchObject({
           id: stored.id,
           label: "Work",
-          value: { ...value, metadata: { clientID: "original-app", tokenEndpoint, custom: "keep" } },
+          value: {
+            ...value,
+            metadata: { clientID: "original-app", tokenEndpoint, custom: "keep", teamID: team.id, teamSlug: team.slug },
+          },
         })
         expect(yield* integrations.connection.resolve(connection)).toEqual(value)
         expect(server.requests).toHaveLength(1)
@@ -253,6 +299,66 @@ describe("Vercel OAuth", () => {
       expect(server.requests.filter((request) => request.url === tokenEndpoint)).toEqual([])
       expect(yield* credentials.list(integrationID)).toEqual([])
     }),
+  )
+
+  it.effect("paginates authorized teams and requires an explicit choice when several are available", () =>
+    Effect.gen(function* () {
+      const server = backend()
+      server.replies.teams = [
+        {
+          status: 200,
+          body: {
+            teams: [team, { id: "team_sso", slug: "sso", name: "SSO", limited: true }],
+            pagination: { next: 123 },
+          },
+        },
+        {
+          status: 200,
+          body: { teams: [{ id: "team_other", slug: "other", name: "Other" }], pagination: { next: null } },
+        },
+      ]
+      const integrations = yield* register(server.client)
+      const credentials = yield* Credential.Service
+      const attempt = yield* integrations.oauth.connect({ integrationID, methodID })
+      const status = yield* ready(integrations, attempt.attemptID)
+      if (status.status !== "pending") throw new Error("Expected team choice")
+      expect(status.experimental?.setup).toEqual([
+        expect.objectContaining({
+          options: [
+            { value: team.id, label: team.name, description: team.slug },
+            { value: "team_other", label: "Other", description: "other" },
+          ],
+        }),
+      ])
+      expect(status.experimental?.setup[0]).not.toHaveProperty("default")
+      expect(server.requests.some((request) => request.url.includes("until=123"))).toBe(true)
+      yield* integrations.oauth.cancel({ integrationID, attemptID: attempt.attemptID })
+      expect(yield* credentials.list(integrationID)).toEqual([])
+    }),
+  )
+  ;[
+    { name: "missing team permission", status: 403, body: {}, message: "Team Read" },
+    {
+      name: "no authorized teams",
+      status: 200,
+      body: { teams: [], pagination: { next: null } },
+      message: "No authorized",
+    },
+  ].forEach((scenario) =>
+    it.effect(`rejects ${scenario.name} without saving credentials`, () =>
+      Effect.gen(function* () {
+        const server = backend()
+        server.replies.teams = [scenario]
+        const integrations = yield* register(server.client)
+        const credentials = yield* Credential.Service
+        const attempt = yield* integrations.oauth.connect({ integrationID, methodID })
+        expect(yield* terminal(integrations, attempt.attemptID)).toMatchObject({
+          status: "failed",
+          message: expect.stringContaining(scenario.message),
+        })
+        expect(yield* credentials.list(integrationID)).toEqual([])
+      }),
+    ),
   )
 
   const failures = [

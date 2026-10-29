@@ -121,6 +121,7 @@ export function createProviderConnectionController(options: {
     methodIndex?: number
     authorization?: Authorization
     command?: { attempt: CommandAttempt; output: string }
+    setup?: ReadonlyArray<FormField>
     formAnswer?: FormAnswer
     // Nothing is in flight until a method is selected; `busy()` reads this, so a truthy initial
     // value would keep multi-method providers on the spinner instead of the method list.
@@ -172,6 +173,7 @@ export function createProviderConnectionController(options: {
           draft.authorization = undefined
           draft.command = undefined
           draft.formAnswer = undefined
+          draft.setup = undefined
           draft.state = undefined
           draft.error = undefined
           draft.connected = false
@@ -336,6 +338,11 @@ export function createProviderConnectionController(options: {
         error: language.t(isConsole() ? "provider.connect.console.expired" : "provider.connect.oauth.expired"),
       })
 
+      return
+    }
+
+    if (result.status.experimental?.setup) {
+      setStore({ state: "form", setup: result.status.experimental.setup, error: undefined })
       return
     }
 
@@ -578,9 +585,31 @@ export function createProviderConnectionController(options: {
 
     if (!result.ok)
       return formatServerError(result.error, language.t, language.t("provider.connect.oauth.code.invalid"))
-    await finish()
+    await poll(authorization, polling.generation)
 
     return undefined
+  }
+
+  const completeSetup = async (answer: FormAnswer) => {
+    const authorization = store.authorization
+    if (!authorization) return
+    const generation = polling.generation
+    setStore({ state: "pending", error: undefined })
+    const result = await serverSDK.api.integration.oauth
+      .complete({
+        integrationID: options.provider(),
+        attemptID: authorization.attemptID,
+        location: location(),
+        experimental: { answer },
+      })
+      .then(() => ({ ok: true as const }))
+      .catch((error) => ({ ok: false as const, error }))
+    if (polling.disposed || generation !== polling.generation) return
+    if (!result.ok) {
+      setStore({ state: "form", error: formatServerError(result.error, language.t) })
+      return
+    }
+    await poll(authorization, generation)
   }
 
   createEffect(() => {
@@ -603,6 +632,7 @@ export function createProviderConnectionController(options: {
     currentMethod,
     methodIndex: () => store.methodIndex,
     authorization: () => store.authorization,
+    setup: () => store.setup,
     command: () => store.command,
     browserFailed: () => store.browserFailed,
     // True while nothing useful can be shown yet: the integration is loading, a method is
@@ -623,6 +653,7 @@ export function createProviderConnectionController(options: {
       refresh: finish,
       connectKey,
       completeCode,
+      completeSetup,
     },
   }
 }
