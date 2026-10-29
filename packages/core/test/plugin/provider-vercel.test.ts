@@ -180,7 +180,11 @@ describe("Vercel OAuth", () => {
         expect(exchange.has("client_secret")).toBe(false)
         expect(exchange.get("code_verifier")).toMatch(/^[A-Za-z0-9_-]{43}$/)
         expect(authorization.searchParams.get("code_challenge")).toBe(
-          Buffer.from(yield* Effect.promise(() => crypto.subtle.digest("SHA-256", new TextEncoder().encode(exchange.get("code_verifier") ?? "")))).toString("base64url"),
+          Buffer.from(
+            yield* Effect.promise(() =>
+              crypto.subtle.digest("SHA-256", new TextEncoder().encode(exchange.get("code_verifier") ?? "")),
+            ),
+          ).toString("base64url"),
         )
         const setup = yield* ready(integrations, attempt.attemptID)
         expect(setup).toMatchObject({ status: "pending", experimental: { setup: [{ options: [{ value: team.id }] }] } })
@@ -359,7 +363,6 @@ describe("Vercel OAuth", () => {
       expect(yield* integrations.connection.active(integrationID)).toEqual(active)
     }),
   )
-
   ;[
     { name: "missing state", params: { code: "injected" } },
     { name: "wrong state", params: { state: "wrong", code: "injected" } },
@@ -377,20 +380,31 @@ describe("Vercel OAuth", () => {
         Object.entries(scenario.params).forEach(([key, value]) => callback.searchParams.set(key, value))
         if (scenario.state) callback.searchParams.set("state", authorization.searchParams.get("state") ?? "")
         if (scenario.path) callback.pathname = scenario.path
-        const response = yield* Effect.promise(() => fetch(callback, { method: scenario.method, headers: { Connection: "close" } }))
+        const response = yield* Effect.promise(() =>
+          fetch(callback, { method: scenario.method, headers: { Connection: "close" } }),
+        )
         expect(response.status).toBe(scenario.path || scenario.method ? 404 : 400)
         expect(server.requests.filter((request) => request.url === tokenEndpoint)).toEqual([])
-        expect((yield* integrations.oauth.status({ integrationID, attemptID: attempt.attemptID })).status).toBe("pending")
+        expect((yield* integrations.oauth.status({ integrationID, attemptID: attempt.attemptID })).status).toBe(
+          "pending",
+        )
         callback.pathname = "/oauth/callback"
-        callback.search = new URLSearchParams({ state: authorization.searchParams.get("state") ?? "", code: "test-code", iss: "https://vercel.com" }).toString()
+        callback.search = new URLSearchParams({
+          state: authorization.searchParams.get("state") ?? "",
+          code: "test-code",
+          iss: "https://vercel.com",
+        }).toString()
         expect((yield* Effect.promise(() => fetch(callback, { headers: { Connection: "close" } }))).status).toBe(200)
         expect((yield* terminal(integrations, attempt.attemptID)).status).toBe("complete")
       }),
     ),
   )
-
   ;[
-    { name: "denial", params: { error: "access_denied", error_description: "sensitive-provider-detail" }, message: "denied" },
+    {
+      name: "denial",
+      params: { error: "access_denied", error_description: "sensitive-provider-detail" },
+      message: "denied",
+    },
     { name: "missing code", params: {}, message: "authorization code" },
   ].forEach((scenario) =>
     it.live(`rejects ${scenario.name}, closes the listener and saves no credential`, () =>
@@ -406,7 +420,10 @@ describe("Vercel OAuth", () => {
         const response = yield* Effect.promise(() => fetch(callback, { headers: { Connection: "close" } }))
         expect(response.status).toBe(400)
         expect(yield* Effect.promise(() => response.text())).not.toContain("sensitive-provider-detail")
-        expect(yield* ready(integrations, attempt.attemptID)).toMatchObject({ status: "failed", message: expect.stringContaining(scenario.message) })
+        expect(yield* ready(integrations, attempt.attemptID)).toMatchObject({
+          status: "failed",
+          message: expect.stringContaining(scenario.message),
+        })
         expect(Exit.isFailure(yield* Effect.tryPromise(() => fetch(callback)).pipe(Effect.exit))).toBe(true)
         expect(yield* credentials.list(integrationID)).toEqual([])
         expect(server.requests.filter((request) => request.url === tokenEndpoint)).toEqual([])
@@ -417,29 +434,43 @@ describe("Vercel OAuth", () => {
   it.live("keeps concurrent browser attempts separate and exchanges each code only once", () =>
     Effect.gen(function* () {
       const server = backend()
-      server.replies.tokens.push({ status: 200, body: { ...token, access_token: "second-access", refresh_token: "second-refresh" } })
+      server.replies.tokens.push({
+        status: 200,
+        body: { ...token, access_token: "second-access", refresh_token: "second-refresh" },
+      })
       server.replies.teams.push({ status: 200, body: { teams: [team], pagination: { next: null } } })
       const integrations = yield* register(server.client)
-      const attempts = yield* Effect.all(["First", "Second"].map((label) => integrations.oauth.connect({ integrationID, methodID, label })))
+      const attempts = yield* Effect.all(
+        ["First", "Second"].map((label) => integrations.oauth.connect({ integrationID, methodID, label })),
+      )
       const urls = attempts.map((attempt) => new URL(attempt.url))
       expect(urls[0]?.searchParams.get("state")).not.toBe(urls[1]?.searchParams.get("state"))
       expect(urls[0]?.searchParams.get("code_challenge")).not.toBe(urls[1]?.searchParams.get("code_challenge"))
-      yield* Effect.forEach([1, 0], (index) => Effect.gen(function* () {
-        const authorization = urls[index]
-        const attempt = attempts[index]
-        if (!authorization || !attempt) throw new Error("Expected both login attempts")
-        const callback = new URL(authorization.searchParams.get("redirect_uri") ?? "")
-        callback.searchParams.set("state", authorization.searchParams.get("state") ?? "")
-        callback.searchParams.set("code", `code-${index}`)
-        expect((yield* Effect.promise(() => fetch(callback, { headers: { Connection: "close" } }))).status).toBe(200)
-        // A replay before billing-team confirmation must not trigger another exchange.
-        expect((yield* Effect.promise(() => fetch(callback, { headers: { Connection: "close" } }))).status).toBe(409)
-        expect((yield* terminal(integrations, attempt.attemptID)).status).toBe("complete")
-        expect(Exit.isFailure(yield* Effect.tryPromise(() => fetch(callback)).pipe(Effect.exit))).toBe(true)
-      }))
-      expect(server.requests.filter((request) => request.url === tokenEndpoint).map((request) => new URLSearchParams(request.body).get("code"))).toEqual(["code-1", "code-0"])
+      yield* Effect.forEach([1, 0], (index) =>
+        Effect.gen(function* () {
+          const authorization = urls[index]
+          const attempt = attempts[index]
+          if (!authorization || !attempt) throw new Error("Expected both login attempts")
+          const callback = new URL(authorization.searchParams.get("redirect_uri") ?? "")
+          callback.searchParams.set("state", authorization.searchParams.get("state") ?? "")
+          callback.searchParams.set("code", `code-${index}`)
+          expect((yield* Effect.promise(() => fetch(callback, { headers: { Connection: "close" } }))).status).toBe(200)
+          // A replay before billing-team confirmation must not trigger another exchange.
+          expect((yield* Effect.promise(() => fetch(callback, { headers: { Connection: "close" } }))).status).toBe(409)
+          expect((yield* terminal(integrations, attempt.attemptID)).status).toBe("complete")
+          expect(Exit.isFailure(yield* Effect.tryPromise(() => fetch(callback)).pipe(Effect.exit))).toBe(true)
+        }),
+      )
+      expect(
+        server.requests
+          .filter((request) => request.url === tokenEndpoint)
+          .map((request) => new URLSearchParams(request.body).get("code")),
+      ).toEqual(["code-1", "code-0"])
       const credentials = yield* Credential.Service
-      expect((yield* credentials.list(integrationID)).map((value) => value.label).toSorted()).toEqual(["First", "Second"])
+      expect((yield* credentials.list(integrationID)).map((value) => value.label).toSorted()).toEqual([
+        "First",
+        "Second",
+      ])
     }),
   )
 
@@ -522,7 +553,12 @@ describe("Vercel OAuth", () => {
   )
 
   const failures = [
-    { name: "expired authorization code", status: 400, body: { error: "invalid_grant" }, message: "Vercel authorization failed (400)" },
+    {
+      name: "expired authorization code",
+      status: 400,
+      body: { error: "invalid_grant" },
+      message: "Vercel authorization failed (400)",
+    },
     {
       name: "generic OAuth error",
       status: 400,

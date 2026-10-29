@@ -65,7 +65,10 @@ export const VercelPlugin = define<HttpClient.HttpClient | Scope.Scope>({
                 response.writeHead(404).end()
                 return
               }
-              if (url.searchParams.get("state") !== state || (url.searchParams.has("iss") && url.searchParams.get("iss") !== issuer)) {
+              if (
+                url.searchParams.get("state") !== state ||
+                (url.searchParams.has("iss") && url.searchParams.get("iss") !== issuer)
+              ) {
                 response.writeHead(400).end("Invalid OAuth callback")
                 return
               }
@@ -75,17 +78,21 @@ export const VercelPlugin = define<HttpClient.HttpClient | Scope.Scope>({
                   ? "Vercel did not return an authorization code. Start sign-in again."
                   : undefined
               if (error) {
-                response.writeHead(400, { "Content-Type": "text/html" }).end(OauthCallbackPage.error(error, { provider: "Vercel" }))
+                response
+                  .writeHead(400, { "Content-Type": "text/html" })
+                  .end(OauthCallbackPage.error(error, { provider: "Vercel" }))
                 Effect.runSync(Deferred.fail(callback, new Error(error)))
                 return
               }
               if (!Effect.runSync(Deferred.succeed(callback, { code: url.searchParams.get("code") ?? "", response })))
                 response.writeHead(409).end("OAuth callback already received")
             })
-            yield* Effect.addFinalizer(() => Effect.sync(() => {
-              server.close()
-              server.closeAllConnections()
-            }))
+            yield* Effect.addFinalizer(() =>
+              Effect.sync(() => {
+                server.close()
+                server.closeAllConnections()
+              }),
+            )
             yield* Effect.tryPromise({
               try: () => EventEmitter.once(server.listen(0, "127.0.0.1"), "listening"),
               catch: () => new Error("Could not start the local Vercel sign-in callback. Try signing in again."),
@@ -107,7 +114,8 @@ export const VercelPlugin = define<HttpClient.HttpClient | Scope.Scope>({
                 code_challenge_method: "S256",
                 state,
               })}`,
-              instructions: "Sign in to Vercel in your browser. Then return to OpenCode to choose the team billed for AI Gateway usage.",
+              instructions:
+                "Sign in to Vercel in your browser. Then return to OpenCode to choose the team billed for AI Gateway usage.",
               callback: Effect.gen(function* () {
                 const request = yield* Deferred.await(callback)
                 return yield* form(http, context.tokenEndpoint, {
@@ -121,8 +129,18 @@ export const VercelPlugin = define<HttpClient.HttpClient | Scope.Scope>({
                   Effect.flatMap((response) => decode(response, Token)),
                   Effect.flatMap((token) => credential(token, context)),
                   // Authorization is finished; saving still requires billing-team confirmation in OpenCode.
-                  Effect.tap(() => Effect.sync(() => request.response.writeHead(200, { "Content-Type": "text/html" }).end(OauthCallbackPage.success()))),
-                  Effect.tapError((error) => Effect.sync(() => request.response.writeHead(400, { "Content-Type": "text/html" }).end(OauthCallbackPage.error(error.message, { provider: "Vercel" })))),
+                  Effect.tap(() =>
+                    Effect.sync(() =>
+                      request.response.writeHead(200, { "Content-Type": "text/html" }).end(OauthCallbackPage.success()),
+                    ),
+                  ),
+                  Effect.tapError((error) =>
+                    Effect.sync(() =>
+                      request.response
+                        .writeHead(400, { "Content-Type": "text/html" })
+                        .end(OauthCallbackPage.error(error.message, { provider: "Vercel" })),
+                    ),
+                  ),
                   Effect.onInterrupt(() => Effect.sync(() => request.response.destroy())),
                 )
               }),
