@@ -23,6 +23,20 @@ const methodID = Integration.MethodID.make("gateway-oauth")
 const tokenEndpoint = "https://api.vercel.com/login/oauth/token"
 const team = { id: "team_work", slug: "work", name: "Work" }
 const token = { access_token: "test-access", refresh_token: "test-refresh", expires_in: 3600 }
+const invalidTokens = [
+  { name: "missing refresh token", body: { ...token, refresh_token: undefined } },
+  { name: "empty access token", body: { ...token, access_token: "" } },
+  { name: "malformed token body", body: null },
+  {
+    name: "malformed token JSON",
+    body: `{"access_token":"${token.access_token}","refresh_token":"${token.refresh_token}",`,
+  },
+  { name: "missing token lifetime", body: { ...token, expires_in: undefined } },
+  { name: "string token lifetime", body: { ...token, expires_in: "3600" } },
+  { name: "zero token lifetime", body: { ...token, expires_in: 0 } },
+  { name: "negative token lifetime", body: { ...token, expires_in: -1 } },
+  { name: "fractional token lifetime", body: { ...token, expires_in: 0.5 } },
+].map((scenario) => ({ ...scenario, status: 200, message: "invalid OAuth response" }))
 
 function backend() {
   const requests: {
@@ -70,7 +84,11 @@ function backend() {
         if (web.url.endsWith("/device-authorization")) return Response.json(replies.device)
         if (web.url === tokenEndpoint) {
           const reply = replies.tokens.shift()
-          return reply ? Response.json(reply.body, { status: reply.status }) : new Response(null, { status: 500 })
+          if (!reply) return new Response(null, { status: 500 })
+          // String fixtures provide raw response bodies for JSON decoding failures.
+          return typeof reply.body === "string"
+            ? new Response(reply.body, { status: reply.status, headers: { "content-type": "application/json" } })
+            : Response.json(reply.body, { status: reply.status })
         }
         if (web.url.startsWith("https://api.vercel.com/v2/teams?")) {
           const reply = replies.teams.shift()
@@ -245,31 +263,65 @@ describe("Vercel OAuth", () => {
       }),
     ),
   )
-
-  it.effect("rejects revoked refresh tokens without removing the saved connection", () =>
-    Effect.gen(function* () {
-      const server = backend()
-      server.replies.tokens = [{ status: 400, body: { error: "invalid_grant" } }]
-      const credentials = yield* Credential.Service
-      const stored = yield* credentials.create({
-        integrationID,
-        value: Credential.OAuth.make({
-          type: "oauth",
-          methodID,
-          access: "expired-access",
-          refresh: "revoked-refresh",
-          expires: 0,
-          metadata: { clientID: "original-app", tokenEndpoint },
-        }),
-      })
-      const integrations = yield* register(server.client)
-      const connection = yield* integrations.connection.active(integrationID)
-      if (!connection) throw new Error("Expected stored connection")
-      const result = yield* integrations.connection.resolve(connection).pipe(Effect.exit)
-      if (Exit.isSuccess(result)) throw new Error("Expected revoked refresh to fail")
-      expect(Cause.pretty(result.cause)).toContain("Sign in with Vercel again")
-      expect(yield* credentials.get(stored.id)).toEqual(stored)
-    }),
+  ;[
+    {
+      name: "revoked refresh token",
+      status: 400,
+      body: { error: "invalid_grant" },
+      message: "Sign in with Vercel again",
+    },
+    {
+      name: "OAuth error",
+      status: 400,
+      body: { error: "invalid_client", error_description: `${token.access_token} ${token.refresh_token}` },
+      message: "Vercel authorization failed (400)",
+    },
+    {
+      name: "server error",
+      status: 500,
+      body: { error: "server_error" },
+      message: "Vercel authorization failed (500)",
+    },
+    {
+      name: "malformed OAuth error",
+      status: 400,
+      body: { error: 123, access_token: token.access_token, refresh_token: token.refresh_token },
+      message: "invalid OAuth response",
+    },
+    ...invalidTokens,
+  ].forEach((scenario) =>
+    it.effect(`rejects ${scenario.name} during refresh without changing the saved connection`, () =>
+      Effect.gen(function* () {
+        const server = backend()
+        server.replies.tokens = [scenario]
+        const credentials = yield* Credential.Service
+        const stored = yield* credentials.create({
+          integrationID,
+          label: "Saved work connection",
+          value: Credential.OAuth.make({
+            type: "oauth",
+            methodID,
+            access: "expired-access",
+            refresh: "saved-refresh",
+            expires: 0,
+            metadata: { clientID: "original-app", tokenEndpoint, teamID: team.id, teamSlug: team.slug },
+          }),
+        })
+        const integrations = yield* register(server.client)
+        const connection = yield* integrations.connection.active(integrationID)
+        if (!connection) throw new Error("Expected stored connection")
+        const result = yield* integrations.connection.resolve(connection).pipe(Effect.exit)
+        if (Exit.isSuccess(result)) throw new Error("Expected refresh to fail")
+        const message = Cause.pretty(result.cause)
+        expect(message).toContain(scenario.message)
+        expect(message).not.toContain(token.access_token)
+        expect(message).not.toContain(token.refresh_token)
+        expect(message).not.toContain("expired-access")
+        expect(message).not.toContain("saved-refresh")
+        expect(yield* credentials.list(integrationID)).toEqual([stored])
+        expect(yield* integrations.connection.active(integrationID)).toEqual(connection)
+      }),
+    ),
   )
 
   it.effect("honors pending and slow-down replies before storing a credential", () =>
@@ -344,6 +396,24 @@ describe("Vercel OAuth", () => {
       body: { teams: [], pagination: { next: null } },
       message: "No authorized",
     },
+    {
+      name: "only limited teams",
+      status: 200,
+      body: { teams: [{ ...team, limited: true }], pagination: { next: null } },
+      message: "No authorized",
+    },
+    {
+      name: "malformed team response",
+      status: 200,
+      body: { teams: [{ ...team, id: 123 }], pagination: { next: null } },
+      message: "invalid OAuth response",
+    },
+    {
+      name: "missing team pagination",
+      status: 200,
+      body: { teams: [team] },
+      message: "invalid OAuth response",
+    },
   ].forEach((scenario) =>
     it.effect(`rejects ${scenario.name} without saving credentials`, () =>
       Effect.gen(function* () {
@@ -365,11 +435,24 @@ describe("Vercel OAuth", () => {
     { name: "denied sign-in", status: 400, body: { error: "access_denied" }, message: "denied" },
     { name: "expired device code", status: 400, body: { error: "expired_token" }, message: "expired" },
     {
-      name: "missing refresh token",
-      status: 200,
-      body: { ...token, refresh_token: undefined },
+      name: "generic OAuth error",
+      status: 400,
+      body: { error: "invalid_client", error_description: `${token.access_token} ${token.refresh_token}` },
+      message: "Vercel sign-in failed",
+    },
+    {
+      name: "token server error",
+      status: 500,
+      body: { error: "server_error" },
+      message: "Vercel sign-in failed",
+    },
+    {
+      name: "malformed OAuth error",
+      status: 400,
+      body: { error: 123, access_token: token.access_token, refresh_token: token.refresh_token },
       message: "invalid OAuth response",
     },
+    ...invalidTokens,
   ]
   failures.forEach((scenario) =>
     it.effect(`rejects ${scenario.name} without saving a partial credential`, () =>
@@ -385,6 +468,7 @@ describe("Vercel OAuth", () => {
           message: expect.stringContaining(scenario.message),
         })
         expect(JSON.stringify(status)).not.toContain(token.access_token)
+        expect(JSON.stringify(status)).not.toContain(token.refresh_token)
         expect(yield* credentials.list(integrationID)).toEqual([])
       }),
     ),
