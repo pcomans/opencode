@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test"
 import path from "node:path"
 import { OPENCODE_VERSION } from "../src/version"
 import type { FormFields } from "@opencode/client"
+import { tmpdir } from "../../core/test/fixture/tmpdir"
+import { isolatedEnv } from "./fixture/environment"
 
 const consoleForm = [
   { type: "string", key: "server", hidden: true, format: "uri", default: "https://opencode.ai/console" },
@@ -216,6 +218,80 @@ describe("auth command", () => {
     expect(requests).toContainEqual({ method: "DELETE", path: `${endpoint}/con_oauth` })
   })
 
+  test("submits post-consent OAuth setup defaults before checking completion", async () => {
+    await using directory = await tmpdir("opencode-cli-oauth-setup-")
+    const requests: string[] = []
+    const answers: unknown[] = []
+    const endpoint = "/api/integration/company/connect/oauth"
+    using server = authServer(async (request, url) => {
+      if (url.pathname.startsWith(endpoint)) requests.push(`${request.method} ${url.pathname}`)
+      if (url.pathname === "/api/integration") {
+        return Response.json(
+          located([
+            {
+              id: "company",
+              name: "Company",
+              methods: [{ id: "browser", type: "oauth", label: "Browser" }],
+              connections: [],
+            },
+          ]),
+        )
+      }
+      if (url.pathname === endpoint && request.method === "POST") {
+        return Response.json(
+          located({
+            attemptID: "con_setup",
+            url: "https://example.com/authorize",
+            instructions: "Authorize Company",
+            mode: "auto",
+            time: { created: 1, expires: 2 },
+          }),
+        )
+      }
+      if (url.pathname === `${endpoint}/con_setup` && request.method === "GET") {
+        // An ignored setup expires on the next poll, so a regression exits instead of leaving a child waiting.
+        return Response.json(
+          located({
+            time: { created: 1, expires: 2 },
+            ...(requests.filter((request) => request === `GET ${endpoint}/con_setup`).length === 1
+              ? {
+                  status: "pending",
+                  experimental: {
+                    setup: [
+                      { key: "teamID", type: "string", required: true, hidden: true, default: "team_work" },
+                    ],
+                  },
+                }
+              : { status: answers.length ? "complete" : "expired" }),
+          }),
+        )
+      }
+      if (url.pathname === `${endpoint}/con_setup/complete` && request.method === "POST") {
+        answers.push(await request.json())
+        return new Response(null, { status: 204 })
+      }
+      if (url.pathname === `${endpoint}/con_setup` && request.method === "DELETE") {
+        return new Response(null, { status: 204 })
+      }
+      return new Response("Not found", { status: 404 })
+    })
+
+    const result = await cli(
+      ["auth", "login", "company", "--server", server.url.toString()],
+      isolatedEnv(directory.path),
+    )
+    expect({ exitCode: result.exitCode, stderr: result.stderr }).toEqual({ exitCode: 0, stderr: "" })
+    expect(answers).toEqual([{ experimental: { answer: { teamID: "team_work" } } }])
+    expect(requests).toEqual([
+      `POST ${endpoint}`,
+      `GET ${endpoint}/con_setup`,
+      `POST ${endpoint}/con_setup/complete`,
+      `GET ${endpoint}/con_setup`,
+      `DELETE ${endpoint}/con_setup`,
+    ])
+    expect(result.stdout).toContain("Connected to Company")
+  })
+
   test("reports OAuth status polling failures and cancels the attempt", async () => {
     let cancelled = false
     using server = authServer((request, url) => {
@@ -372,9 +448,10 @@ function located<T>(data: T) {
   }
 }
 
-async function cli(args: string[]) {
+async function cli(args: string[], env?: ReturnType<typeof isolatedEnv>) {
   const child = Bun.spawn([process.execPath, "run", "src/index.ts", ...args], {
     cwd: path.join(import.meta.dir, ".."),
+    env,
     stdout: "pipe",
     stderr: "pipe",
   })
