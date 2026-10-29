@@ -261,9 +261,7 @@ describe("auth command", () => {
               ? {
                   status: "pending",
                   experimental: {
-                    setup: [
-                      { key: "teamID", type: "string", required: true, hidden: true, default: "team_work" },
-                    ],
+                    setup: [{ key: "teamID", type: "string", required: true, hidden: true, default: "team_work" }],
                   },
                 }
               : answers.length
