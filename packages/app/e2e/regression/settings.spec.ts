@@ -1833,7 +1833,7 @@ test("providers: OAuth waits for a billing team before connecting", async ({ pag
   const next = page.getByRole("dialog").getByRole("button", { name: "Continue", exact: true })
   await expect(next).toBeDisabled()
   expect(answers).toEqual([])
-  await picker.getByRole("radio", { name: "Internal Playground", exact: true }).click()
+  await picker.getByRole("radio", { name: "Internal Playground vercel-internal-playground", exact: true }).click()
   await expect(next).toBeEnabled()
   await page.screenshot({ path: test.info().outputPath("billing-team-picker.png") })
   await next.click()
