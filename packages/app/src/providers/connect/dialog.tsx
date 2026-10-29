@@ -807,7 +807,7 @@ function ProviderConnection(props: {
 
       if (index === -1) {
         if (controller.setup()) {
-          void controller.auth.completeSetup(answer)
+          void controller.auth.completeSetup(merged)
           return
         }
         void controller.auth.select(controller.methodIndex()!, answer)

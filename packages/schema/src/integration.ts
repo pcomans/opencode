@@ -106,8 +106,8 @@ export const AttemptStatus = Schema.Union([
     time: AttemptTime,
     experimental: optional(
       Schema.Struct({
-        setup: Form.Fields.annotate({ description: "Experimental: may change without compatibility guarantees." }),
-      }),
+        setup: Form.Fields,
+      }).annotate({ description: "Experimental: may change without compatibility guarantees." }),
     ),
   }),
   Schema.Struct({ status: Schema.Literal("complete"), time: AttemptTime }),

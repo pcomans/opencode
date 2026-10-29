@@ -456,57 +456,65 @@ const layer = Layer.effect(
     }
 
     const settle = Effect.fnUntraced(function* (attemptID: AttemptID, exit: Exit.Exit<Credential.OAuth, unknown>) {
-      const now = yield* Clock.currentTimeMillis
-      const attempt = yield* SynchronizedRef.modify(attempts, (current) => {
-        const match = current.get(attemptID)
-        if (!match || match.status !== "pending" || match.persisting) return [undefined, current]
-        const next = Exit.isSuccess(exit)
-          ? { ...match, persisting: true }
-          : {
-              status: "failed" as const,
-              integrationID: match.integrationID,
-              message: message(exit.cause),
-              time: match.time,
-              removeAt: now + terminalRetention,
-            }
-        return [match, new Map(current).set(attemptID, next)]
-      })
-      if (!attempt) return
-      if (Exit.isFailure(exit)) {
-        yield* close(attempt.scope)
-        return
-      }
+      const attempt = (yield* SynchronizedRef.get(attempts)).get(attemptID)
+      if (!attempt || attempt.status !== "pending" || attempt.persisting) return
 
-      const persistence = yield* Effect.gen(function* () {
+      const preparation = yield* Effect.gen(function* () {
+        const value = yield* exit
         const implementation = state
           .get()
           .integrations.get(attempt.integrationID)
           ?.implementations.get(attempt.methodID)
         if (!attempt.setup && implementation?.experimental) {
-          const setup = yield* implementation.experimental.setup(exit.value)
+          const setup = yield* implementation.experimental.setup(value)
           const invalid = Form.validateFields(setup.fields)
           if (invalid) return yield* Effect.fail(new Error(invalid))
-          return setup
+          return { setup }
         }
-        yield* createCredential({
-          integrationID: attempt.integrationID,
-          label: attempt.label ?? implementation?.label?.(exit.value),
-          value: exit.value,
-        })
-      }).pipe(Effect.exit)
-      const settledAt = yield* Clock.currentTimeMillis
-      if (Exit.isSuccess(persistence) && persistence.value) {
-        yield* SynchronizedRef.update(attempts, (current) =>
-          new Map(current).set(attemptID, {
-            ...attempt,
-            completing: false,
-            persisting: false,
-            setup: persistence.value,
-            time: { ...attempt.time, expires: settledAt + attemptLifetime },
-          }),
-        )
+        return { value, label: attempt.label ?? implementation?.label?.(value) }
+      }).pipe(
+        // Setup belongs to the attempt even when completion runs in an HTTP caller's fiber.
+        Effect.forkIn(attempt.scope, { startImmediately: true }),
+        Effect.flatMap(Fiber.join),
+        Effect.interruptible,
+        Effect.exit,
+      )
+      const preparedAt = yield* Clock.currentTimeMillis
+      const claimed = yield* SynchronizedRef.modify(attempts, (current) => {
+        const match = current.get(attemptID)
+        if (!match || match.status !== "pending" || match.persisting) return [false, current]
+        const next: AttemptEntry = Exit.isFailure(preparation)
+          ? {
+              status: "failed",
+              integrationID: match.integrationID,
+              message: message(preparation.cause),
+              time: match.time,
+              removeAt: preparedAt + terminalRetention,
+            }
+          : "setup" in preparation.value
+            ? {
+                ...match,
+                completing: false,
+                setup: preparation.value.setup,
+                time: { ...match.time, expires: preparedAt + attemptLifetime },
+              }
+            : { ...match, persisting: true }
+        return [true, new Map(current).set(attemptID, next)]
+      })
+      if (!claimed) return
+      if (Exit.isFailure(preparation)) {
+        yield* close(attempt.scope)
+        if (Exit.isSuccess(exit)) yield* authorize(preparation)
         return
       }
+      if ("setup" in preparation.value) return
+
+      const persistence = yield* createCredential({
+        integrationID: attempt.integrationID,
+        label: preparation.value.label,
+        value: preparation.value.value,
+      }).pipe(Effect.exit)
+      const settledAt = yield* Clock.currentTimeMillis
       const terminal: TerminalAttempt = Exit.isSuccess(persistence)
         ? {
             status: "complete",

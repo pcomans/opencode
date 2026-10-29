@@ -12,7 +12,7 @@ import { Keymap } from "../../../src/context/keymap"
 import { LocationProvider, useLocation } from "../../../src/context/location"
 import { ThemeProvider } from "../../../src/context/theme"
 import { DialogProvider, useDialog } from "../../../src/ui/dialog"
-import { ToastProvider } from "../../../src/ui/toast"
+import { Toast, ToastProvider } from "../../../src/ui/toast"
 import { emptyThemeSource } from "../../fixture/fixture"
 import { createApi, createEventStream, createFetch, json } from "../../fixture/tui-client"
 import { TestTuiContexts } from "../../fixture/tui-environment"
@@ -247,12 +247,48 @@ test("uses the active location for integration data without scoping credential r
   }
 })
 
-async function renderIntegration(activeLocation?: LocationRef, form?: FormFields) {
+test.each([
+  { status: "complete" as const, message: "Connected OpenAI" },
+  { status: "failed" as const, message: "Billing team is no longer available" },
+  { status: "expired" as const, message: "Authorization expired" },
+])("checks the $status OAuth status after submitting setup", async ({ status, message }) => {
+  const fixture = await renderIntegration(undefined, undefined, status)
+
+  try {
+    fixture.app.mockInput.pressEnter()
+    await fixture.app.waitForFrame(
+      (frame) =>
+        frame.includes("Choose a billing team") &&
+        fixture.app.renderer.currentFocusedEditor instanceof InputRenderable,
+    )
+    fixture.app.mockInput.pressEnter()
+    await fixture.app.waitForFrame((frame) => frame.includes(message))
+
+    expect(fixture.reads.oauth).toBe(2)
+    expect(fixture.requests.find((request) => request.path.endsWith("/complete"))?.body).toEqual({
+      experimental: { answer: { teamID: "team_work" } },
+    })
+    if (status !== "complete") {
+      expect(fixture.app.captureCharFrame()).not.toContain("Connected OpenAI")
+      expect(fixture.reads.model).toBe(0)
+      expect(fixture.reads.provider).toBe(0)
+    }
+  } finally {
+    fixture.app.renderer.destroy()
+  }
+})
+
+async function renderIntegration(
+  activeLocation?: LocationRef,
+  form?: FormFields,
+  oauth?: "complete" | "failed" | "expired",
+) {
   const events = createEventStream()
   const requests: Array<{ method: string; path: string; body?: unknown }> = []
   const locations: LocationRef[] = []
   const credentialQueries: string[] = []
-  const reads = { integration: 0, model: 0, provider: 0 }
+  const reads = { integration: 0, model: 0, provider: 0, oauth: 0 }
+  const authorization = { submitted: false }
   let accounts = [
     { type: "credential" as const, method: "key" as const, id: "cred_personal", label: "Personal" },
     { type: "credential" as const, method: "key" as const, id: "cred_work", label: "Work" },
@@ -277,7 +313,9 @@ async function renderIntegration(activeLocation?: LocationRef, form?: FormFields
           {
             id: "openai",
             name: "OpenAI",
-            methods: [{ type: "key", label: "API key", form }],
+            methods: oauth
+              ? [{ type: "oauth", id: "fixture-oauth", label: "Sign in" }]
+              : [{ type: "key", label: "API key", form }],
             connections: [...accounts, { type: "env", name: "OPENAI_API_KEY" }],
           },
         ],
@@ -286,6 +324,58 @@ async function renderIntegration(activeLocation?: LocationRef, form?: FormFields
 
     if (request.method === "POST" && url.pathname === "/api/integration/openai/connect/key") {
       requests.push({ method: request.method, path: url.pathname, body: await request.json() })
+      return new Response(null, { status: 204 })
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/integration/openai/connect/oauth") {
+      return json({
+        location,
+        data: {
+          attemptID: "attempt_fixture",
+          mode: "auto",
+          url: "https://auth.example.test/device",
+          instructions: "Sign in",
+          time: { created: 0, expires: 600_000 },
+        },
+      })
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/integration/openai/connect/oauth/attempt_fixture") {
+      reads.oauth++
+      return json({
+        location,
+        data: {
+          time: { created: 0, expires: 600_000 },
+          ...(authorization.submitted
+            ? { status: oauth, ...(oauth === "failed" ? { message: "Billing team is no longer available" } : {}) }
+            : {
+                status: "pending",
+                experimental: {
+                  setup: [
+                    {
+                      key: "teamID",
+                      type: "string",
+                      title: "Choose a billing team",
+                      required: true,
+                      options: [{ value: "team_work", label: "Work" }],
+                    },
+                  ],
+                },
+              }),
+        },
+      })
+    }
+
+    if (
+      request.method === "POST" &&
+      url.pathname === "/api/integration/openai/connect/oauth/attempt_fixture/complete"
+    ) {
+      requests.push({ method: request.method, path: url.pathname, body: await request.json() })
+      authorization.submitted = true
+      return new Response(null, { status: 204 })
+    }
+
+    if (request.method === "DELETE" && url.pathname === "/api/integration/openai/connect/oauth/attempt_fixture") {
       return new Response(null, { status: 204 })
     }
 
@@ -368,6 +458,7 @@ async function renderIntegration(activeLocation?: LocationRef, form?: FormFields
                     <ThemeProvider mode="dark" source={emptyThemeSource}>
                       <DialogProvider>
                         <Probe />
+                        <Toast />
                       </DialogProvider>
                     </ThemeProvider>
                   </LocationProvider>
