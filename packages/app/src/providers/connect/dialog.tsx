@@ -701,9 +701,11 @@ function ProviderConnection(props: {
     const authorization = controller.authorization()
 
     if (!authorization) return
-    const userCode = new URL(authorization.url).searchParams.get("user_code")
+    const params = new URL(authorization.url).searchParams
+    const userCode = params.get("user_code")
 
     if (userCode) return userCode
+    if (params.get("response_type") === "code") return
     const instructions = authorization.instructions
 
     if (instructions?.includes(":")) return instructions.split(":").pop()?.trim()
