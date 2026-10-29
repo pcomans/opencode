@@ -8,6 +8,7 @@ OpenCode uses a shared Sign in with Vercel app owned by its maintainers. Individ
 
 - Configure the app as a **public client**, with client authentication set to **`none`**. Do not distribute a client secret with the desktop app or CLI.
 - Enable **AI Gateway → Use** (`use:ai-gateway`) and **Team → Read** (`read:team`). Team Read lets the app list teams available to the signed-in user. No API-key management or budget-management permissions are needed.
+- If the app requires installation, install it on the billing team with both permissions. User sign-in consent alone does not replace the required team installation.
 - Enable the `openid` and `offline_access` scopes. The authorization request sends these identity/token-lifecycle scopes; the AI Gateway resource permission is configured on the app.
 - Confirm with Vercel that the OpenCode-owned public client can use the device authorization grant and refresh tokens. Public Sign in with Vercel documentation describes authorization-code and refresh grants; it does not establish third-party device-grant eligibility.
 - Set `OPENCODE_VERCEL_CLIENT_ID` in the **OpenCode server's environment**, or replace the default `REPLACE_ME` client ID before release. No borrowed client ID is included.
@@ -46,9 +47,13 @@ The tests use fixture HTTP responses, the real integration state machine and cre
 
 A personal test app completed the updated flow on 2026-10-29: fresh device consent with both permissions, live team discovery, explicit selection of `philippcomans-1463`, and credential persistence. With no manual provider-header configuration, the packaged server returned HTTP 200 and `703` for `37 × 19`; a desktop chat using Vercel / GPT 5.4 Nano returned `225` for `58 + 167` and completed successfully.
 
-The initial version failed inference without a team selector. The updated flow supplies the selected team ID from the saved OAuth credential. These checks establish live sign-in, team setup, and inference for the test app; they do not validate the maintainer-owned release client, live refresh rotation, or live revocation.
+Live revocation and recovery were also tested on 2026-10-29. After the app owner revoked all tokens, introspection reported both saved tokens inactive, the real refresh exchange returned `invalid_grant`, and Gateway returned 401. OpenCode showed an authentication failure in desktop chat and retained the saved credential. The first inference after inactive introspection still succeeded before later requests failed; the test does not establish immediate revocation propagation or a specific cache duration.
 
-Before release, repeat the flow using the maintainer-owned client and validate live refresh-token rotation and reauthentication after revocation. The fixture tests cannot establish permission eligibility, device-grant availability, or live Gateway acceptance for a new app.
+During recovery, the test app's configuration had changed from v1 permissions without required installation to v2 permissions with required installation. Fresh consent initially returned no usable teams. The personal billing team had no installation; after installing the app there with both permissions and repeating real device consent, OpenCode displayed the team picker and saved a new active OAuth connection. The old connection remained saved and inactive, and its access token remained revoked. Server inference returned HTTP 200 / `109` for `41 + 68`; a new desktop chat using Vercel / GPT 5.4 Nano also returned `109` and completed successfully. No manual provider header or Gateway API key was used.
+
+The initial version failed inference without a team selector. The updated flow supplies the selected team ID from the saved OAuth credential. These checks establish live sign-in, team setup, inference, revocation failure, and reauthentication recovery for the test app; they do not validate the maintainer-owned release client or live refresh rotation.
+
+Before release, repeat the flow using the maintainer-owned client and validate live refresh-token rotation. The fixture tests cannot establish permission eligibility, device-grant availability, or live Gateway acceptance for a new app.
 
 Confirm with Vercel whether beta enablement is needed only for the app owner's team or also for teams authorizing the app. A public sign-in setting does not establish API-permission eligibility for every user's team.
 
