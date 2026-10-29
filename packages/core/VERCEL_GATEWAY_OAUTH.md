@@ -40,6 +40,8 @@ Manual API-key entry and environment-variable credentials remain available for u
 
 ## Verification
 
+The [complete test plan and execution matrix](VERCEL_GATEWAY_OAUTH_TEST_PLAN.md) distinguishes live checks, fixture coverage, and remaining release checks.
+
 From `packages/core`:
 
 ```sh
