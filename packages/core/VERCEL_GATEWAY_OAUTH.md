@@ -9,11 +9,14 @@ OpenCode uses a shared Sign in with Vercel app owned by its maintainers. Individ
 - Configure the app as a **public client**, with client authentication set to **`none`**. Do not distribute a client secret with the desktop app or CLI.
 - Enable **AI Gateway → Use** (`use:ai-gateway`) and **Team → Read** (`read:team`). Team Read lets the app list teams available to the signed-in user. No API-key management or budget-management permissions are needed.
 - If the app requires installation, install it on the billing team with both permissions. User sign-in consent alone does not replace the required team installation.
+- Use the app's v2 permissions model with the intended team-installation policy. Vercel identified the test app's earlier consent screen with preselected, non-deselectable teams as a bad beta configuration. The corrected device flow lets users choose team installations; OpenCode then confirms which authorized team pays for inference.
 - Enable the `openid` and `offline_access` scopes. The authorization request sends these identity/token-lifecycle scopes; the AI Gateway resource permission is configured on the app.
 - Confirm with Vercel that the OpenCode-owned public client can use the device authorization grant and refresh tokens. Public Sign in with Vercel documentation describes authorization-code and refresh grants; it does not establish third-party device-grant eligibility.
 - Set `OPENCODE_VERCEL_CLIENT_ID` in the **OpenCode server's environment**, or replace the default `REPLACE_ME` client ID before release. No borrowed client ID is included.
 
 **Private-beta access is still a release requirement unless Vercel confirms otherwise.** Vercel currently lists AI Gateway → Use in the API permissions section marked private beta. The narrower permission does not, by itself, establish general availability.
+
+Vercel also identified missing API-permission display in the beta device-consent screen during this test. Confirm that the release consent screen shows the requested permissions. The test app currently requests only Team Read and AI Gateway Use, alongside the identity and refresh scopes listed above.
 
 ## Connection and refresh
 
