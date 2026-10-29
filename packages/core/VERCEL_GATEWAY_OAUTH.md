@@ -32,7 +32,7 @@ The billing team belongs to the saved OAuth connection, alongside its original c
 
 The post-sign-in form is an experimental integration setup API, supported by desktop, TUI, and interactive CLI. Attempt status exposes only form fields; access and refresh tokens stay on the server. Cancelling or letting setup expire discards the pending credential.
 
-Vercel documents one-hour access tokens and rotating, single-use refresh tokens. OpenCode refreshes credentials within five minutes of access-token expiry and saves both newly returned tokens on the same connection. The original app client ID and token endpoint remain attached to that credential, so a later environment change does not send its refresh token under a different client ID.
+Vercel documents one-hour access tokens and rotating, single-use refresh tokens. When a connection is used, OpenCode refreshes credentials within five minutes of access-token expiry and saves both newly returned tokens on the same connection. The original app client ID and token endpoint remain attached to that credential, so a later environment change does not send its refresh token under a different client ID.
 
 If the refresh token expires or is revoked, sign in with Vercel again. Failed refreshes do not delete the existing credential. Token exchange and decoding errors do not include token response bodies in user-facing errors.
 
@@ -56,9 +56,13 @@ Live revocation and recovery were also tested on 2026-10-29. After the app owner
 
 During recovery, the test app's configuration had changed from v1 permissions without required installation to v2 permissions with required installation. Fresh consent initially returned no usable teams. The personal billing team had no installation; after installing the app there with both permissions and repeating real device consent, OpenCode displayed the team picker and saved a new active OAuth connection. The old connection remained saved and inactive, and its access token remained revoked. Server inference returned HTTP 200 / `109` for `41 + 68`; a new desktop chat using Vercel / GPT 5.4 Nano also returned `109` and completed successfully. No manual provider header or Gateway API key was used.
 
-The initial version failed inference without a team selector. The updated flow supplies the selected team ID from the saved OAuth credential. These checks establish live sign-in, team setup, inference, revocation failure, and reauthentication recovery for the test app; they do not validate the maintainer-owned release client or live refresh rotation.
+The initial version failed inference without a team selector. The updated flow supplies the selected team ID from the saved OAuth credential. These checks establish live sign-in, team setup, inference, revocation failure, and reauthentication recovery for the test app; they do not validate the maintainer-owned release client.
 
-Before release, repeat the flow using the maintainer-owned client and validate live refresh-token rotation. The fixture tests cannot establish permission eligibility, device-grant availability, or live Gateway acceptance for a new app.
+Live automatic refresh also passed on 2026-10-29. The original access token aged naturally to its five-minute refresh window. Immediately before requests at 21:04:22 UTC, its stored pair and expiry were unchanged. Two concurrent inference requests returned HTTP 200 / `93`; OpenCode saved new access and refresh tokens on the same credential, preserving its label and billing/client metadata. Expiry advanced from 21:09:21 UTC to 22:04:22 UTC. Vercel introspection reported the new access token active and the old refresh token inactive. A subsequent inference returned `93` without another rotation or browser approval. No expiry was fabricated and no manual refresh exchange was used. This proves automatic renewal when the connection is used; it does not establish periodic renewal while idle or exactly one live token-endpoint exchange.
+
+The new test profile is canonical. It has separate local storage but copied the earlier test profile's OAuth grant, so the earlier copy now has a stale refresh token. The installed OpenCode service/profile was not changed.
+
+Before release, repeat the flow using the maintainer-owned client. The fixture tests cannot establish permission eligibility, device-grant availability, or live Gateway acceptance for a new app.
 
 Confirm with Vercel whether beta enablement is needed only for the app owner's team or also for teams authorizing the app. A public sign-in setting does not establish API-permission eligibility for every user's team.
 
