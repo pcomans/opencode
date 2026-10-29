@@ -395,7 +395,6 @@ describe("Integration", () => {
       expect(yield* credentials.list(integrationID)).toHaveLength(1)
     }),
   )
-
   ;(["auto", "code"] as const).forEach((mode) => {
     ;(["cancel", "expire"] as const).forEach((reason) => {
       it.effect(`${reason}s ${mode} OAuth while setup is preparing`, () =>
@@ -443,10 +442,9 @@ describe("Integration", () => {
           const attempt = yield* integrations.oauth.connect({ integrationID, methodID })
           const completion =
             mode === "code"
-              ? yield* integrations.oauth.complete({ integrationID, attemptID: attempt.attemptID, code: "1234" }).pipe(
-                  Effect.exit,
-                  Effect.forkChild({ startImmediately: true }),
-                )
+              ? yield* integrations.oauth
+                  .complete({ integrationID, attemptID: attempt.attemptID, code: "1234" })
+                  .pipe(Effect.exit, Effect.forkChild({ startImmediately: true }))
               : undefined
           yield* Deferred.await(entered)
           if (reason === "cancel") {
