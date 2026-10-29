@@ -88,8 +88,8 @@ export const AttemptID = Schema.String.pipe(
 export type AttemptID = typeof AttemptID.Type
 
 const AttemptTime = Schema.Struct({
-  created: Schema.Number,
-  expires: Schema.Number,
+  created: Schema.Finite,
+  expires: Schema.Finite,
 })
 
 export class Attempt extends Schema.Class<Attempt>("Integration.Attempt")({
@@ -101,7 +101,15 @@ export class Attempt extends Schema.Class<Attempt>("Integration.Attempt")({
 }) {}
 
 export const AttemptStatus = Schema.Union([
-  Schema.Struct({ status: Schema.Literal("pending"), time: AttemptTime }),
+  Schema.Struct({
+    status: Schema.Literal("pending"),
+    time: AttemptTime,
+    experimental: optional(
+      Schema.Struct({
+        setup: Form.Fields,
+      }).annotate({ description: "Experimental: may change without compatibility guarantees." }),
+    ),
+  }),
   Schema.Struct({ status: Schema.Literal("complete"), time: AttemptTime }),
   Schema.Struct({ status: Schema.Literal("failed"), message: Schema.String, time: AttemptTime }),
   Schema.Struct({ status: Schema.Literal("expired"), time: AttemptTime }),

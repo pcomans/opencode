@@ -1,5 +1,6 @@
 import { Predicate, Schema, SchemaGetter } from "effect"
 import { HttpApi, HttpApiEndpoint, HttpApiGroup, HttpApiSchema } from "effect/http-api"
+import { Form } from "@opencode/schema/form"
 import { Pty } from "@opencode/schema/pty"
 import { Worktree } from "@opencode/schema/worktree"
 
@@ -123,6 +124,27 @@ const Group = HttpApiGroup.make("mock")
       params: { integrationID: Schema.String, attemptID: Schema.String },
       success: Json,
       error: MockNotFound.pipe(HttpApiSchema.status(404)),
+    }),
+  )
+  .add(
+    HttpApiEndpoint.post(
+      "integrationOAuthComplete",
+      "/api/integration/:integrationID/connect/oauth/:attemptID/complete",
+      {
+        params: { integrationID: Schema.String, attemptID: Schema.String },
+        payload: Schema.Struct({
+          code: Schema.optional(Schema.String),
+          experimental: Schema.optional(Schema.Struct({ answer: Form.Answer })),
+        }),
+        success: NoContent,
+        error: Unsupported,
+      },
+    ),
+  )
+  .add(
+    HttpApiEndpoint.delete("integrationOAuthCancel", "/api/integration/:integrationID/connect/oauth/:attemptID", {
+      params: { integrationID: Schema.String, attemptID: Schema.String },
+      success: NoContent,
     }),
   )
   .add(
