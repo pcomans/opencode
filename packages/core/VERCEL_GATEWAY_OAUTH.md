@@ -48,4 +48,6 @@ From `packages/core`:
 bun run script/test.ts test/plugin/provider-vercel.test.ts
 ```
 
+A personal test app completed real browser authorization on 2026-10-29, followed by billing-team confirmation and native Gateway inference (HTTP 200, `703` for `37 × 19`). A desktop chat returned `391` for `17 × 23`. The profile had no Gateway environment connection. Internal Playground testing is blocked on an administrator installing the app there; personal-team results do not establish Playground billing.
+
 The provider tests exercise real loopback sockets, the integration state machine, credential storage, and native Gateway request construction, with fixture responses for Vercel. They cover PKCE, callback validation, denial, missing code, cancellation, concurrent attempts, replay, team selection, token-response failures, and refresh rotation. They do not constitute real Vercel sign-in or model inference.
