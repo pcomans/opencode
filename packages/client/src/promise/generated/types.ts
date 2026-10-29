@@ -228,12 +228,6 @@ export type ConnectionStatus = { status: "needs_auth"; message: string; url?: st
 
 export type IntegrationAttemptID = string
 
-export type IntegrationAttemptStatus =
-  | { status: "pending"; time: { created: number; expires: number } }
-  | { status: "complete"; time: { created: number; expires: number } }
-  | { status: "failed"; message: string; time: { created: number; expires: number } }
-  | { status: "expired"; time: { created: number; expires: number } }
-
 export type IntegrationCommandAttemptStatus =
   | {
       status: "pending"
@@ -2530,7 +2524,7 @@ export type CredentialEntry = {
   value: CredentialValue
 }
 
-export type FormFields1 = [FormField1, ...Array<FormField1>]
+export type FormFields2 = [FormField1, ...Array<FormField1>]
 
 export type ScheduleInfo = {
   id: ScheduleID
@@ -2605,6 +2599,26 @@ export type IntegrationKeyMethod = { type: "key"; label?: string; form?: FormFie
 
 export type IntegrationExternalMethod = { id: IntegrationMethodID; type: "external"; label: string; form?: FormFields }
 
+export type IntegrationAttemptStatus =
+  | {
+      status: "pending"
+      time: { created: number | "Infinity" | "-Infinity" | "NaN"; expires: number | "Infinity" | "-Infinity" | "NaN" }
+      experimental?: { setup: FormFields }
+    }
+  | {
+      status: "complete"
+      time: { created: number | "Infinity" | "-Infinity" | "NaN"; expires: number | "Infinity" | "-Infinity" | "NaN" }
+    }
+  | {
+      status: "failed"
+      message: string
+      time: { created: number | "Infinity" | "-Infinity" | "NaN"; expires: number | "Infinity" | "-Infinity" | "NaN" }
+    }
+  | {
+      status: "expired"
+      time: { created: number | "Infinity" | "-Infinity" | "NaN"; expires: number | "Infinity" | "-Infinity" | "NaN" }
+    }
+
 export type SessionInboxEnqueued = {
   id: EventID
   created: number
@@ -2622,7 +2636,7 @@ export type SessionMessageAssistantContentEncoded =
 
 export type GenerateDecisionsResponse = { data: GenerateDecisionResult }
 
-export type FormInfo1 = { id: FormID; sessionID: string; title: string; metadata?: FormMetadata1; fields: FormFields1 }
+export type FormInfo1 = { id: FormID; sessionID: string; title: string; metadata?: FormMetadata1; fields: FormFields2 }
 
 export type SessionMessageInfo =
   | SessionMessageAgentSelected
@@ -3913,6 +3927,9 @@ export type IntegrationOauthCompleteInput = {
   readonly attemptID: string
   readonly location?: { readonly directory?: string | undefined } | undefined
   readonly code?: string | undefined
+  readonly experimental?:
+    | { readonly answer: { readonly [x: string]: string | number | boolean | ReadonlyArray<string> } }
+    | undefined
 }
 
 export type IntegrationOauthCompleteOutput = void

@@ -280,8 +280,8 @@ const loadCatalogPackage = Effect.fn("ModelResolver.loadCatalogPackage")(functio
   const settings = {
     ...(credential ? Struct.omit(mapped, ["accessToken", "apiKey", "authToken"]) : mapped),
     ...(resolved.canonical === undefined ? {} : { provider: resolved.canonical }),
-    ...nativeCredentialSettings(resolved, specifier, credential),
     headers: resolved.headers,
+    ...nativeCredentialSettings(resolved, specifier, credential),
     body: resolved.body,
   }
   return { resolved, configured, module, settings }
@@ -364,7 +364,8 @@ function prepareProviderURL(
   const prepared = baseURL.replace(
     /\$\{([^}]+)\}/g,
     (placeholder, name: string) =>
-      (name === "AWS_REGION" && typeof settings.region === "string" ? settings.region : process.env[name]) ?? placeholder,
+      (name === "AWS_REGION" && typeof settings.region === "string" ? settings.region : process.env[name]) ??
+      placeholder,
   )
   const failure = unresolvedProviderVariables(model, prepared)
   return failure ? Effect.fail(failure) : Effect.succeed(prepared)
@@ -383,7 +384,17 @@ function unresolvedProviderVariables(model: RuntimeInfo, baseURL: string) {
 const nativeCredentialSettings = (model: RuntimeInfo, specifier: string, credential: Credential.Value | undefined) => {
   if (!credential) return {}
   if (credential.type === "key") return { apiKey: credential.key }
-  if (credential.type === "oauth") return tokenSettings(specifier, credential.access)
+  if (credential.type === "oauth") {
+    if (
+      specifier.startsWith("@opencode/ai/providers/vercel-ai-gateway") &&
+      typeof credential.metadata?.teamID === "string"
+    )
+      return {
+        ...tokenSettings(specifier, credential.access),
+        headers: { ...model.headers, "x-vercel-ai-gateway-team": credential.metadata.teamID },
+      }
+    return tokenSettings(specifier, credential.access)
+  }
   // The Bedrock plugin projects the saved profile into settings; SigV4 keeps an ambient bearer token from taking over.
   if (specifier.startsWith("@opencode/ai/providers/amazon-bedrock")) return { auth: "sigv4" }
   // The Azure plugin's request hooks replace this with an Entra ID token from the Azure CLI; it only gets the

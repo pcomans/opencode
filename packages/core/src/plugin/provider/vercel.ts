@@ -2,6 +2,7 @@ import { Clock, Effect, Schema } from "effect"
 import type { Scope } from "effect"
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http"
 import { define } from "@opencode/plugin/effect/plugin"
+import { Form } from "@opencode/schema/form"
 import { Credential } from "../../credential.js"
 import { Integration } from "../../integration.js"
 
@@ -26,6 +27,16 @@ const Token = Schema.Struct({
 })
 const OAuthError = Schema.Struct({ error: Schema.String })
 const Context = Schema.Struct({ clientID: Schema.NonEmptyString, tokenEndpoint: Schema.NonEmptyString })
+const Team = Schema.Struct({
+  id: Schema.NonEmptyString,
+  slug: Schema.NonEmptyString,
+  name: Schema.NonEmptyString,
+  limited: Schema.optional(Schema.Boolean),
+})
+const Teams = Schema.Struct({
+  teams: Schema.Array(Team),
+  pagination: Schema.Struct({ next: Schema.NullOr(Schema.Number) }),
+})
 
 export const VercelPlugin = define<HttpClient.HttpClient | Scope.Scope>({
   id: "opencode.provider.vercel",
@@ -58,13 +69,49 @@ export const VercelPlugin = define<HttpClient.HttpClient | Scope.Scope>({
             return {
               mode: "auto" as const,
               url: device.verification_uri_complete ?? device.verification_uri,
-              instructions: `Sign in to Vercel and enter code ${device.user_code}. OpenCode will use your account's AI Gateway access without creating an API key.`,
+              instructions: `Sign in to Vercel and enter code ${device.user_code}. Then return to OpenCode to choose the team billed for AI Gateway usage.`,
               expiresAt,
               callback: poll(http, device.device_code, context, expiresAt, (device.interval ?? 5) * 1000).pipe(
                 Effect.flatMap((token) => credential(token, context)),
               ),
             }
           }),
+        experimental: {
+          setup: (value) =>
+            Effect.gen(function* () {
+              const teams = (yield* listTeams(http, value.access)).filter((team) => !team.limited)
+              if (!teams.length)
+                return yield* Effect.fail(
+                  new Error(
+                    "No authorized Vercel teams are available. Sign in again and authorize a team with Team Read and AI Gateway Use access.",
+                  ),
+                )
+              return {
+                fields: [
+                  {
+                    key: "teamID",
+                    type: "string" as const,
+                    title: "Choose a billing team",
+                    description: "AI Gateway usage will be billed to this Vercel team.",
+                    required: true,
+                    ...(teams.length === 1 ? { default: teams[0].id } : {}),
+                    options: teams.map((team) => ({ value: team.id, label: team.name, description: team.slug })),
+                  },
+                ] as const,
+                complete: (answer: Form.Answer) => {
+                  const team = teams.find((team) => team.id === answer.teamID)
+                  if (!team) return Effect.fail(new Error("Choose an authorized Vercel billing team."))
+                  return Effect.succeed(
+                    Credential.OAuth.make({
+                      ...value,
+                      metadata: { ...value.metadata, teamID: team.id, teamSlug: team.slug, teamName: team.name },
+                    }),
+                  )
+                },
+              }
+            }),
+        },
+        label: (value) => (typeof value.metadata?.teamName === "string" ? value.metadata.teamName : undefined),
         refresh: (value) =>
           Effect.gen(function* () {
             const context = yield* Schema.decodeUnknownEffect(Context)(value.metadata)
@@ -92,6 +139,29 @@ export const VercelPlugin = define<HttpClient.HttpClient | Scope.Scope>({
     })
   }),
 })
+
+function listTeams(
+  http: HttpClient.HttpClient,
+  access: string,
+  until?: number,
+): Effect.Effect<ReadonlyArray<typeof Team.Type>, unknown> {
+  return Effect.gen(function* () {
+    const response = yield* send(
+      http,
+      HttpClientRequest.get("https://api.vercel.com/v2/teams").pipe(
+        HttpClientRequest.bearerToken(access),
+        HttpClientRequest.setUrlParams({ limit: "100", ...(until === undefined ? {} : { until: String(until) }) }),
+      ),
+    )
+    if (response.status === 403)
+      return yield* Effect.fail(
+        new Error("Vercel team discovery requires Team Read permission. Update the OAuth app and sign in again."),
+      )
+    const page = yield* success(response).pipe(Effect.flatMap((response) => decode(response, Teams)))
+    if (page.pagination.next === null) return page.teams
+    return [...page.teams, ...(yield* listTeams(http, access, page.pagination.next))]
+  })
+}
 
 function poll(
   http: HttpClient.HttpClient,

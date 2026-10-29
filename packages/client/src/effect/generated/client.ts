@@ -1049,7 +1049,7 @@ const EndpointIntegrationOauthComplete =
       raw["integration.oauth.complete"]({
         params: { integrationID: input["integrationID"], attemptID: input["attemptID"] },
         query: { location: input["location"] },
-        payload: { code: input["code"] },
+        payload: { code: input["code"], experimental: input["experimental"] },
       }).pipe(Effect.mapError(mapClientError)),
     )
 
