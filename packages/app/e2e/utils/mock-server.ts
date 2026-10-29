@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test"
-import type { OpenCodeEvent, SessionMessageInfo } from "@opencode/client/promise"
+import type { FormAnswer, FormFields, OpenCodeEvent, SessionMessageInfo } from "@opencode/client/promise"
 import { Permission } from "@opencode/schema/permission"
 import { Model } from "@opencode/schema/model"
 import { Worktree } from "@opencode/schema/worktree"
@@ -116,7 +116,14 @@ export interface MockServerConfig {
   // Without it, OAuth connects answer 501 MockUnsupported.
   onIntegrationOAuth?: (input: { integrationID: string; directory: string; body: unknown }) => { url: string }
   // Answers status polls for an OAuth attempt; without it every attempt stays pending.
-  onIntegrationOAuthStatus?: (attemptID: string) => "pending" | "complete"
+  onIntegrationOAuthStatus?: (attemptID: string) =>
+    | "pending"
+    | "complete"
+    | {
+        status: "pending"
+        experimental: { setup: FormFields }
+      }
+  onIntegrationOAuthComplete?: (input: { attemptID: string; answer?: FormAnswer }) => void
   plugins?: Resolvable<unknown[]>
   skills?: Resolvable<unknown[]>
   // Replaces the `/api/worktree` inventory, which defaults to the directory plus project sandboxes.
@@ -950,14 +957,27 @@ function mockHandlers(
 
             if (created === undefined) return Effect.fail(new MockNotFound({ message: "OAuth attempt not found" }))
 
+            const status = config.onIntegrationOAuthStatus?.(ctx.params.attemptID) ?? "pending"
             return Effect.succeed({
               location: location(config, requestDirectory(config, ctx.request)),
               data: {
-                status: config.onIntegrationOAuthStatus?.(ctx.params.attemptID) ?? "pending",
+                ...(typeof status === "string" ? { status } : status),
                 time: { created, expires: created + 600_000 },
               },
             })
           }),
+        integrationOAuthComplete: (ctx) => {
+          if (!config.onIntegrationOAuthComplete)
+            return unsupported("complete OAuth connections", "onIntegrationOAuthComplete")
+          return Effect.sync(() =>
+            config.onIntegrationOAuthComplete?.({
+              attemptID: ctx.params.attemptID,
+              answer: ctx.payload.experimental?.answer,
+            }),
+          ).pipe(Effect.andThen(noContent))
+        },
+        integrationOAuthCancel: (ctx) =>
+          Effect.sync(() => state.attempts.delete(ctx.params.attemptID)).pipe(Effect.andThen(noContent)),
         credentialActivate: (ctx) =>
           Effect.sync(() => config.onCredentialActivate?.(ctx.params.credentialID)).pipe(Effect.andThen(noContent)),
         credentialUpdate: (ctx) =>
