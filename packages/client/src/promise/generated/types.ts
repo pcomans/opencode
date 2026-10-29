@@ -228,31 +228,11 @@ export type ConnectionStatus = { status: "needs_auth"; message: string; url?: st
 
 export type IntegrationAttemptID = string
 
-export type IntegrationAttemptStatus =
-  | { status: "pending"; time: { created: number; expires: number } }
+export type IntegrationCommandAttemptStatus =
+  | { status: "pending"; message?: string; time: { created: number; expires: number } }
   | { status: "complete"; time: { created: number; expires: number } }
   | { status: "failed"; message: string; time: { created: number; expires: number } }
   | { status: "expired"; time: { created: number; expires: number } }
-
-export type IntegrationCommandAttemptStatus =
-  | {
-      status: "pending"
-      message?: string
-      time: { created: number | "Infinity" | "-Infinity" | "NaN"; expires: number | "Infinity" | "-Infinity" | "NaN" }
-    }
-  | {
-      status: "complete"
-      time: { created: number | "Infinity" | "-Infinity" | "NaN"; expires: number | "Infinity" | "-Infinity" | "NaN" }
-    }
-  | {
-      status: "failed"
-      message: string
-      time: { created: number | "Infinity" | "-Infinity" | "NaN"; expires: number | "Infinity" | "-Infinity" | "NaN" }
-    }
-  | {
-      status: "expired"
-      time: { created: number | "Infinity" | "-Infinity" | "NaN"; expires: number | "Infinity" | "-Infinity" | "NaN" }
-    }
 
 export type McpStatusConnected = { status: "connected" }
 
@@ -2605,6 +2585,12 @@ export type IntegrationKeyMethod = { type: "key"; label?: string; form?: FormFie
 
 export type IntegrationExternalMethod = { id: IntegrationMethodID; type: "external"; label: string; form?: FormFields }
 
+export type IntegrationAttemptStatus =
+  | { status: "pending"; time: { created: number; expires: number }; experimental?: { setup: FormFields } }
+  | { status: "complete"; time: { created: number; expires: number } }
+  | { status: "failed"; message: string; time: { created: number; expires: number } }
+  | { status: "expired"; time: { created: number; expires: number } }
+
 export type SessionInboxEnqueued = {
   id: EventID
   created: number
@@ -3913,6 +3899,9 @@ export type IntegrationOauthCompleteInput = {
   readonly attemptID: string
   readonly location?: { readonly directory?: string | undefined } | undefined
   readonly code?: string | undefined
+  readonly experimental?:
+    | { readonly answer: { readonly [x: string]: string | number | boolean | ReadonlyArray<string> } }
+    | undefined
 }
 
 export type IntegrationOauthCompleteOutput = void

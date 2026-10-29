@@ -67,6 +67,16 @@ export type IntegrationOAuthMethodRegistration = {
   readonly authorize: (answer: Form.Answer) => Effect.Effect<IntegrationOAuthAuthorization, unknown, Scope.Scope>
   readonly refresh?: (credential: Credential.OAuth) => Effect.Effect<Credential.OAuth, unknown>
   readonly label?: (credential: Credential.OAuth) => string | undefined
+  readonly experimental?: {
+    /** Experimental: may change without compatibility guarantees. Runs before saving the credential. */
+    readonly setup: (credential: Credential.OAuth) => Effect.Effect<
+      {
+        readonly fields: Form.Fields
+        readonly complete: (answer: Form.Answer) => Effect.Effect<Credential.OAuth, unknown>
+      },
+      unknown
+    >
+  }
 }
 export type IntegrationMethodRegistration =
   | IntegrationOAuthMethodRegistration

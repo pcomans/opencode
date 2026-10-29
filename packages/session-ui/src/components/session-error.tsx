@@ -1,12 +1,13 @@
 import { createMemo, Show } from "solid-js"
 import { Card } from "@opencode/ui/card"
 import { Icon } from "@opencode/ui/icon"
+import { LinkedText } from "./linked-text"
 
 export function SessionErrorMessage(props: { message: string }) {
   const content = createMemo(() => {
     const separator = props.message.indexOf(":")
 
-    if (separator === -1) return { detail: props.message }
+    if (separator === -1 || props.message.slice(separator, separator + 3) === "://") return { detail: props.message }
 
     return {
       title: props.message.slice(0, separator + 1),
@@ -17,7 +18,7 @@ export function SessionErrorMessage(props: { message: string }) {
   return (
     <>
       <Show when={content().title}>{(title) => <strong class="font-[530]">{title()}</strong>}</Show>
-      {content().detail}
+      <LinkedText text={content().detail} />
     </>
   )
 }

@@ -78,6 +78,14 @@ export interface OAuthImplementation {
   readonly authorize: (answer: Form.Answer) => Effect.Effect<OAuthAuthorization, unknown, Scope.Scope>
   readonly refresh?: (credential: Credential.OAuth) => Effect.Effect<Credential.OAuth, unknown>
   readonly label?: (credential: Credential.OAuth) => string | undefined
+  readonly experimental?: {
+    readonly setup: (credential: Credential.OAuth) => Effect.Effect<OAuthSetup, unknown>
+  }
+}
+
+type OAuthSetup = {
+  readonly fields: Form.Fields
+  readonly complete: (answer: Form.Answer) => Effect.Effect<Credential.OAuth, unknown>
 }
 
 export interface KeyImplementation {
@@ -238,6 +246,7 @@ export interface Interface extends State.Transformable<Editor> {
       readonly integrationID: ID
       readonly attemptID: AttemptID
       readonly code?: string
+      readonly experimental?: { readonly answer: Form.Answer }
     }) => Effect.Effect<void, CodeRequiredError | AuthorizationError | AttemptNotFoundError>
     /** Cancels an attempt and releases its resources. */
     readonly cancel: (input: { readonly integrationID: ID; readonly attemptID: AttemptID }) => Effect.Effect<void>
@@ -268,6 +277,7 @@ type PendingAttempt = {
   completing: boolean
   persisting: boolean
   authorization: OAuthAuthorization
+  setup?: OAuthSetup
   integrationID: ID
   methodID: MethodID
   label?: string
@@ -446,58 +456,83 @@ const layer = Layer.effect(
     }
 
     const settle = Effect.fnUntraced(function* (attemptID: AttemptID, exit: Exit.Exit<Credential.OAuth, unknown>) {
-      const now = yield* Clock.currentTimeMillis
-      const attempt = yield* SynchronizedRef.modify(attempts, (current) => {
+      const attempt = (yield* SynchronizedRef.get(attempts)).get(attemptID)
+      if (!attempt || attempt.status !== "pending" || attempt.persisting) return
+
+      const preparation = yield* Effect.gen(function* () {
+        const value = yield* exit
+        const implementation = state
+          .get()
+          .integrations.get(attempt.integrationID)
+          ?.implementations.get(attempt.methodID)
+        if (!attempt.setup && implementation?.experimental) {
+          const setup = yield* implementation.experimental.setup(value)
+          const invalid = Form.validateFields(setup.fields)
+          if (invalid) return yield* Effect.fail(new Error(invalid))
+          return { setup }
+        }
+        return { value, label: attempt.label ?? implementation?.label?.(value) }
+      }).pipe(
+        // Setup belongs to the attempt even when completion runs in an HTTP caller's fiber.
+        Effect.forkIn(attempt.scope, { startImmediately: true }),
+        Effect.flatMap(Fiber.join),
+        Effect.interruptible,
+        Effect.exit,
+      )
+      const preparedAt = yield* Clock.currentTimeMillis
+      const claimed = yield* SynchronizedRef.modify(attempts, (current) => {
         const match = current.get(attemptID)
-        if (!match || match.status !== "pending" || match.persisting) return [undefined, current]
-        const next = Exit.isSuccess(exit)
-          ? { ...match, persisting: true }
-          : {
-              status: "failed" as const,
+        if (!match || match.status !== "pending" || match.persisting) return [false, current]
+        const next: AttemptEntry = Exit.isFailure(preparation)
+          ? {
+              status: "failed",
               integrationID: match.integrationID,
-              message: message(exit.cause),
+              message: message(preparation.cause),
               time: match.time,
-              removeAt: now + terminalRetention,
+              removeAt: preparedAt + terminalRetention,
             }
-        return [match, new Map(current).set(attemptID, next)]
+          : "setup" in preparation.value
+            ? {
+                ...match,
+                completing: false,
+                setup: preparation.value.setup,
+                time: { ...match.time, expires: preparedAt + attemptLifetime },
+              }
+            : { ...match, persisting: true }
+        return [true, new Map(current).set(attemptID, next)]
       })
-      if (!attempt) return
-      if (Exit.isFailure(exit)) {
+      if (!claimed) return
+      if (Exit.isFailure(preparation)) {
         yield* close(attempt.scope)
+        if (Exit.isSuccess(exit)) yield* authorize(preparation)
         return
       }
+      if ("setup" in preparation.value) return
 
-      yield* Effect.gen(function* () {
-        const persistence = yield* Effect.suspend(() => {
-          const implementation = state
-            .get()
-            .integrations.get(attempt.integrationID)
-            ?.implementations.get(attempt.methodID)
-          return createCredential({
+      const persistence = yield* createCredential({
+        integrationID: attempt.integrationID,
+        label: preparation.value.label,
+        value: preparation.value.value,
+      }).pipe(Effect.exit)
+      const settledAt = yield* Clock.currentTimeMillis
+      const terminal: TerminalAttempt = Exit.isSuccess(persistence)
+        ? {
+            status: "complete",
             integrationID: attempt.integrationID,
-            label: attempt.label ?? implementation?.label?.(exit.value),
-            value: exit.value,
-          })
-        }).pipe(Effect.asVoid, Effect.exit)
-        const settledAt = yield* Clock.currentTimeMillis
-        const terminal: TerminalAttempt = Exit.isSuccess(persistence)
-          ? {
-              status: "complete",
-              integrationID: attempt.integrationID,
-              time: attempt.time,
-              removeAt: settledAt + terminalRetention,
-            }
-          : {
-              status: "failed",
-              integrationID: attempt.integrationID,
-              message: message(persistence.cause),
-              time: attempt.time,
-              removeAt: settledAt + terminalRetention,
-            }
-        // Persisting attempts cannot be cancelled, expired, or claimed again.
-        yield* SynchronizedRef.update(attempts, (current) => new Map(current).set(attemptID, terminal))
-        yield* persistence
-      }).pipe(Effect.ensuring(close(attempt.scope)))
+            time: attempt.time,
+            removeAt: settledAt + terminalRetention,
+          }
+        : {
+            status: "failed",
+            integrationID: attempt.integrationID,
+            message: message(persistence.cause),
+            time: attempt.time,
+            removeAt: settledAt + terminalRetention,
+          }
+      // Persisting attempts cannot be cancelled, expired, or claimed again.
+      yield* SynchronizedRef.update(attempts, (current) => new Map(current).set(attemptID, terminal))
+      yield* close(attempt.scope)
+      yield* authorize(persistence).pipe(Effect.asVoid)
     }, Effect.uninterruptible)
 
     const settleCommand = Effect.fnUntraced(function* (attemptID: AttemptID, exit: Exit.Exit<string, unknown>) {
@@ -842,25 +877,36 @@ const layer = Layer.effect(
           if (attempt.status === "failed") {
             return { status: attempt.status, message: attempt.message ?? "Authorization failed", time: attempt.time }
           }
+          if (attempt.status === "pending" && attempt.setup) {
+            return { status: attempt.status, time: attempt.time, experimental: { setup: attempt.setup.fields } }
+          }
           return { status: attempt.status, time: attempt.time }
         }),
         complete: Effect.fn("Integration.oauth.complete")(function* (input) {
-          const attempt = yield* SynchronizedRef.modify(attempts, (current) => {
-            const match = current.get(input.attemptID)
-            if (!match || match.integrationID !== input.integrationID) return [undefined, current]
-            if (match.status !== "pending" || match.completing) return [match, current]
-            if (match.authorization.mode === "code" && input.code === undefined) return [match, current]
-            return [match, new Map(current).set(input.attemptID, { ...match, completing: true })]
-          })
+          const attempt = yield* SynchronizedRef.modifyEffect(attempts, (current) =>
+            Effect.gen(function* () {
+              const match = current.get(input.attemptID)
+              if (!match || match.integrationID !== input.integrationID) return [undefined, current] as const
+              if (match.status !== "pending" || match.completing) return [match, current] as const
+              if (match.setup) {
+                const invalid = Form.validateAnswer(match.setup.fields, input.experimental?.answer ?? {})
+                if (invalid) return yield* new AuthorizationError({ cause: new Error(invalid) })
+              }
+              if (!match.setup && match.authorization.mode === "code" && input.code === undefined)
+                return [match, current] as const
+              return [match, new Map(current).set(input.attemptID, { ...match, completing: true })] as const
+            }),
+          )
           if (!attempt) return yield* new AttemptNotFoundError(input)
           if (attempt.status !== "pending") return
-          if (attempt.authorization.mode === "code" && input.code === undefined) {
+          if (!attempt.setup && attempt.authorization.mode === "code" && input.code === undefined) {
             return yield* new CodeRequiredError({ attemptID: input.attemptID })
           }
           if (attempt.completing)
             return yield* Effect.die(new Error(`OAuth attempt already completing: ${input.attemptID}`))
-          const callback =
-            attempt.authorization.mode === "auto"
+          const callback = attempt.setup
+            ? attempt.setup.complete(input.experimental?.answer ?? {})
+            : attempt.authorization.mode === "auto"
               ? attempt.authorization.callback
               : attempt.authorization.callback(input.code as string)
           const exit = yield* authorize(callback).pipe(Effect.exit)

@@ -667,6 +667,7 @@ function OAuthAuto(props: {
   const newDesigns = useNewDesigns()
   let timer: ReturnType<typeof setTimeout> | undefined
   let settled = false
+  let disposed = false
 
   const open = () => {
     openUrl(props.attempt.url).catch(() =>
@@ -701,8 +702,37 @@ function OAuthAuto(props: {
         location: locationQuery(props.location),
       })
       .then((result) => {
+        if (disposed) return
         const status = result.data
         if (status.status === "pending") {
+          if (status.experimental?.setup) {
+            settled = true
+            void formAnswer(dialog, props.title, status.experimental.setup)
+              .then(async (answer) => {
+                if (!answer) return
+                await client.api.integration.oauth.complete({
+                  integrationID: props.integration.id,
+                  attemptID: props.attempt.attemptID,
+                  location: locationQuery(props.location),
+                  experimental: { answer },
+                })
+                dialog.replace(() => <OAuthAuto {...props} />)
+              })
+              .catch((cause) => {
+                toast.show({ variant: "error", message: errorMessage(cause) })
+                dialog.clear()
+              })
+              .finally(() =>
+                client.api.integration.oauth
+                  .cancel({
+                    integrationID: props.integration.id,
+                    attemptID: props.attempt.attemptID,
+                    location: locationQuery(props.location),
+                  })
+                  .catch(() => undefined),
+              )
+            return
+          }
           timer = setTimeout(poll, 500)
           return
         }
@@ -715,6 +745,7 @@ function OAuthAuto(props: {
         dialog.clear()
       })
       .catch((cause) => {
+        if (disposed) return
         settled = true
         toast.show({ variant: "error", message: errorMessage(cause) })
         dialog.clear()
@@ -723,6 +754,7 @@ function OAuthAuto(props: {
 
   onMount(poll)
   onCleanup(() => {
+    disposed = true
     if (timer) clearTimeout(timer)
     if (settled) return
     void client.api.integration.oauth.cancel({
@@ -751,10 +783,8 @@ function OAuthCode(props: {
   location: LocationRef
   onConnected?: OnIntegrationConnected
 }) {
-  const data = useData()
   const dialog = useDialog()
   const client = useClient()
-  const toast = useToast()
   const theme = useTheme().surface("dialog")
   const newDesigns = useNewDesigns()
   const [error, setError] = createSignal<string>()
@@ -785,7 +815,7 @@ function OAuthCode(props: {
           })
           .then(() => {
             settled = true
-            return connected(props.integration, props.location, data, dialog, toast, props.onConnected)
+            dialog.replace(() => <OAuthAuto {...props} />)
           })
           .catch((cause) => setError(errorMessage(cause)))
       }}

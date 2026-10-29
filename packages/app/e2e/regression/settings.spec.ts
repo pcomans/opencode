@@ -1305,6 +1305,7 @@ test("providers: adding an account starts a lone method once", async ({ page, co
   const popup = page.waitForEvent("popup")
   await dialog.getByRole("button", { name: "Add account", exact: true }).click()
   await popup
+  await expect(dialog.getByRole("textbox", { name: "Confirmation code", exact: true })).toHaveValue("GH12-3456")
   await expect.poll(() => attempts).toEqual(["github-copilot"])
   expect(attempts).toEqual(["github-copilot"])
 })
@@ -1771,3 +1772,82 @@ for (const viewport of [
     }
   })
 }
+
+test("providers: OAuth waits for a billing team before connecting", async ({ page, context }) => {
+  await context.route("https://auth.example.test/**", (route) => route.fulfill({ body: "Sign in" }))
+  const state = { teamID: "", authorized: false }
+  const answers: unknown[] = []
+  const { settings } = await open(page, {
+    provider: () => ({
+      all: [{ id: "vercel", name: "Vercel AI Gateway", models: {} }],
+      connected: state.teamID ? ["vercel"] : [],
+      default: {},
+    }),
+    integrations: () => [
+      {
+        id: "vercel",
+        name: "Vercel AI Gateway",
+        methods: [{ id: "gateway-oauth", type: "oauth", label: "Sign in with Vercel" }],
+        connections: state.teamID
+          ? [{ type: "credential", id: "cred_vercel", label: "Internal Playground", method: "oauth" }]
+          : [],
+      },
+    ],
+    onIntegrationOAuth: () => ({
+      url: "https://auth.example.test/authorize?response_type=code",
+      instructions: "Sign in to Vercel in your browser. Then return to choose a billing team.",
+    }),
+    onIntegrationOAuthStatus: () =>
+      state.teamID
+        ? "complete"
+        : !state.authorized
+          ? "pending"
+          : {
+              status: "pending",
+              experimental: {
+                setup: [
+                  { key: "region", type: "string", required: true, hidden: true, default: "us" },
+                  {
+                    key: "teamID",
+                    type: "string",
+                    required: true,
+                    title: "Choose a billing team",
+                    description: "AI Gateway usage will be billed to this Vercel team.",
+                    options: [
+                      { value: "team_apps", label: "Internal Apps", description: "vercel-internal-apps" },
+                      {
+                        value: "team_playground",
+                        label: "Internal Playground",
+                        description: "vercel-internal-playground",
+                      },
+                    ],
+                  },
+                ],
+              },
+            },
+    onIntegrationOAuthComplete: (input) => {
+      answers.push(input.answer)
+      state.teamID = String(input.answer?.teamID)
+    },
+  })
+  await settings.getByRole("tab", { name: "Providers", exact: true }).click()
+  await settings.getByRole("button", { name: "Show more providers", exact: true }).click()
+  const popup = page.waitForEvent("popup")
+  await page.getByRole("dialog").locator('[data-provider-id="vercel"]').click()
+  await popup
+  const dialog = page.getByRole("dialog")
+  await expect(dialog.getByText("Waiting for authorization…", { exact: true })).toBeVisible()
+  await expect(dialog.getByRole("textbox", { name: "Confirmation code", exact: true })).toHaveCount(0)
+  state.authorized = true
+  const picker = page.getByRole("radiogroup", { name: "Choose a billing team", exact: true })
+  await expect(picker.getByRole("radio")).toHaveCount(2)
+  const next = page.getByRole("dialog").getByRole("button", { name: "Continue", exact: true })
+  await expect(next).toBeDisabled()
+  expect(answers).toEqual([])
+  await picker.getByText("Internal Playground", { exact: true }).click()
+  await expect(next).toBeEnabled()
+  await page.screenshot({ path: test.info().outputPath("billing-team-picker.png") })
+  await next.click()
+  await expect(page.getByText("Vercel AI Gateway connected", { exact: true })).toBeVisible()
+  expect(answers).toEqual([{ region: "us", teamID: "team_playground" }])
+})

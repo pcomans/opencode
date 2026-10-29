@@ -689,6 +689,7 @@ export function storage(kv: KV.Interface, pluginID: string): Plugin.Context["sto
 function methodImplementation(input: IntegrationMethodRegistration): Integration.Implementation {
   if ("authorize" in input) {
     const refresh = input.refresh
+    const experimental = input.experimental
     return {
       integrationID: Integration.ID.make(input.integrationID),
       method: { ...input.method, id: Integration.MethodID.make(input.method.id) },
@@ -709,6 +710,20 @@ function methodImplementation(input: IntegrationMethodRegistration): Integration
         ),
       ...(refresh ? { refresh: (value: Credential.OAuth) => refresh(value).pipe(Effect.map(credential)) } : {}),
       ...(input.label ? { label: input.label } : {}),
+      ...(experimental
+        ? {
+            experimental: {
+              setup: (value: Credential.OAuth) =>
+                experimental.setup(value).pipe(
+                  Effect.map((setup) => ({
+                    fields: setup.fields,
+                    complete: (answer: Parameters<typeof setup.complete>[0]) =>
+                      setup.complete(answer).pipe(Effect.map(credential)),
+                  })),
+                ),
+            },
+          }
+        : {}),
     }
   }
   if (input.method.type === "env") {

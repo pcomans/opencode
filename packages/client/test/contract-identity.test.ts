@@ -26,6 +26,12 @@ test("generated Effect API names canonical and composed outputs", async () => {
   expect(source).not.toContain("HttpApiClient.ForApi")
 })
 
+test("generated Promise types retain the published form-field export", async () => {
+  const source = await Bun.file(new URL("../src/promise/generated/types.ts", import.meta.url)).text()
+
+  expect(source).toContain("export type FormFields1 =")
+})
+
 test("shared DTO schemas construct and decode plain objects", () => {
   const made = Prompt.make({ text: "hello" })
   const decoded = Schema.decodeUnknownSync(Prompt)({ text: "hello" })

@@ -701,9 +701,11 @@ function ProviderConnection(props: {
     const authorization = controller.authorization()
 
     if (!authorization) return
-    const userCode = new URL(authorization.url).searchParams.get("user_code")
+    const params = new URL(authorization.url).searchParams
+    const userCode = params.get("user_code")
 
     if (userCode) return userCode
+    if (params.get("response_type") === "code") return
     const instructions = authorization.instructions
 
     if (instructions?.includes(":")) return instructions.split(":").pop()?.trim()
@@ -744,7 +746,7 @@ function ProviderConnection(props: {
   // Asks one visible field at a time, like the TUI, so `when` conditions see every earlier answer.
   function AuthFormView() {
     const method = controller.currentMethod()
-    const fields = method && method.type !== "command" ? (method.form ?? []) : []
+    const fields = controller.setup() ?? (method && method.type !== "command" ? (method.form ?? []) : [])
     const hidden = providerFormDefaults(fields)
 
     const [formStore, setFormStore] = createStore<{
@@ -806,6 +808,10 @@ function ProviderConnection(props: {
       const index = fields.findIndex((item, i) => i > formStore.index && asked(item) && active(item, merged))
 
       if (index === -1) {
+        if (controller.setup()) {
+          void controller.auth.completeSetup(merged)
+          return
+        }
         void controller.auth.select(controller.methodIndex()!, answer)
 
         return
@@ -1114,7 +1120,7 @@ function ProviderConnection(props: {
                 </form>
               </Match>
             </Switch>
-            <Show when={formStore.error}>
+            <Show when={formStore.error ?? controller.auth.error()}>
               {(error) => (
                 <div role="alert" class="text-xs text-v2-state-fg-danger">
                   {error()}
