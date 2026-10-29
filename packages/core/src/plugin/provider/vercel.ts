@@ -37,7 +37,7 @@ export const VercelPlugin = define<HttpClient.HttpClient | Scope.Scope>({
         method: { id: methodID, type: "oauth", label: "Sign in with Vercel" },
         authorize: () =>
           Effect.gen(function* () {
-            const clientID = process.env.OPENCODE_VERCEL_CLIENT_ID ?? "REPLACE_ME"
+            const clientID = process.env.OPENCODE_VERCEL_CLIENT_ID ?? "cl_EcnZcQYlrTXOllm0dj3nqEWQDE5FSLcd"
             const discovery = yield* send(
               http,
               HttpClientRequest.get("https://vercel.com/.well-known/openid-configuration"),
